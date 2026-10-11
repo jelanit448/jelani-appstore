@@ -21,13 +21,30 @@ I can't create accounts for you.
    data disk (so your apps and money survive restarts) and a random session secret.
 5. Open the URL Render gives you — that's your public store, working like Google Play.
 
-## After it's live
-- Log in as owner with the seeded owner account and change the password
-  immediately (it forces this on first login).
-- Swap the placeholder ViralMode file for the real APK (normal developer upload
-  in your dashboard) once the APK build finishes.
-- Money stays in DEMO mode until you add your Stripe key + complete KYC —
-  see README.md. Nobody can be charged or paid out before that, by design.
+## Turning on real money (Stripe)
+
+The store now has a real Stripe checkout built in. Until you do these steps it
+stays in DEMO mode — nobody can be charged, by design.
+
+1. **Sign up at https://stripe.com** (Individual / sole proprietor is fine).
+   For "business name" put **Jelani's App Store**; the website is
+   `https://jelani-appstore.onrender.com`.
+2. Activate payments in Stripe (it asks for your ID and bank info for payouts).
+3. In Stripe: **Developers → API keys** → copy the **Secret key**
+   (starts with `sk_live_`). Send it to me — I'll add it to the store.
+4. In Render: go to your web service → **Environment** → add:
+   - `STRIPE_SECRET_KEY` = the secret key
+   - `PUBLIC_URL` = `https://jelani-appstore.onrender.com`
+5. In Stripe: **Developers → Webhooks → Add endpoint**:
+   - URL: `https://jelani-appstore.onrender.com/api/webhook/stripe`
+   - Events: `checkout.session.completed` and `charge.refunded`
+   - Copy the **Signing secret** (starts with `whsec_`) → add as
+     `STRIPE_WEBHOOK_SECRET` in Render's Environment.
+6. Render redeploys automatically. The owner dashboard then shows
+   "Stripe connected: yes", and buyers check out on Stripe's secure page.
+   Ledger rows are only written after Stripe confirms the charge, so the
+   90/10 split (developer/platform) is enforced on real money too.
+   Refunds go through Stripe as well, from the dashboard.
 
 ## Costs to know about
 - Render's starter plan (needed for the persistent disk) is paid. The free tier
