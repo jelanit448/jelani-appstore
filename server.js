@@ -593,6 +593,20 @@ app.post('/api/owner/apps/:id/replace-file', requireRole('owner'), (req, res) =>
   res.json({ ok: true, app_id: appRow.id, file_size: meta.size_bytes });
 });
 
+// Owner-only: change an app's listing status (approve, reject/unlist, or send
+// back to pending). Lets the owner pull a bad or test listing off the store.
+app.post('/api/owner/apps/:id/status', requireRole('owner'), (req, res) => {
+  const { status } = req.body || {};
+  if (!['approved', 'rejected', 'pending'].includes(status)) {
+    return res.status(400).json({ error: "status must be 'approved', 'rejected', or 'pending'." });
+  }
+  const id = toId(req.params.id);
+  const appRow = id ? db.prepare('SELECT id FROM apps WHERE id = ?').get(id) : null;
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  db.prepare('UPDATE apps SET status = ? WHERE id = ?').run(status, id);
+  res.json({ ok: true, app_id: id, status });
+});
+
 // ---------------------------------------------------------------------------
 // money: purchases, refunds, finance
 // ---------------------------------------------------------------------------
