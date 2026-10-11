@@ -45,13 +45,31 @@ async function load() {
   if (dl) dl.onclick = () => { location.href = '/api/apps/' + id + '/download'; setTimeout(load, 1500); };
   const buy = document.getElementById('buy');
   if (buy) buy.onclick = async () => {
+    const info = document.getElementById('payinfo');
+    info.innerHTML = '<span class="muted">Starting checkout…</span>';
     try {
+      // Real money: Stripe Checkout (hosted by Stripe — we never see card numbers).
+      // Falls back to the demo purchase flow until Stripe is connected.
+      try {
+        const r = await api('/api/purchase/checkout', { method: 'POST', body: { app_id: Number(id) } });
+        location.href = r.checkout_url;
+        return;
+      } catch (e2) {
+        if (!/not connected yet|demo mode/i.test(e2.message)) throw e2;
+      }
       const r = await api('/api/purchase', { method: 'POST', body: { app_id: Number(id) } });
-      document.getElementById('payinfo').innerHTML =
-        `<div class="okmsg">✅ ${r.demoBanner}<br>Paid ${esc(r.gross)} → developer ${esc(r.developer_share)} · platform fee ${esc(r.platform_fee)}.</div>`;
+      info.innerHTML =
+        `<div class="okmsg">✅ ${esc(r.demoBanner)}<br>Paid ${esc(r.gross)} → developer ${esc(r.developer_share)} · platform fee ${esc(r.platform_fee)}.</div>`;
       setTimeout(load, 1200);
-    } catch (e) { showErr(document.getElementById('msg'), e.message); }
+    } catch (e) {
+      info.innerHTML = '';
+      showErr(document.getElementById('msg'), e.message);
+    }
   };
+  if (new URLSearchParams(location.search).get('cancelled') === '1') {
+    document.getElementById('payinfo').innerHTML =
+      '<div class="muted">Checkout was cancelled — no charge was made.</div>';
+  }
   document.getElementById('reviews').innerHTML = d.reviews.length
     ? d.reviews.map(r => `<p><b>${esc(r.username)}</b> <span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span><br>${esc(r.text)}<br><span class="muted">${esc(r.created_at)}</span></p>`).join('')
     : '<p class="muted">No reviews yet — be the first.</p>';
