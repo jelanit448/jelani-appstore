@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>App — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="demo"></div>
+  <div id="msg"></div>
+  <div id="app"></div>
+  <div class="panel"><h2>Reviews</h2><div id="reviews"></div>
+    <div id="revform" style="margin-top:12px"></div>
+  </div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+async function load() {
+  const d = await api('/api/apps/' + id);
+  const a = d.app;
+  document.title = a.name + ' — Jelani\'s App Store';
+  document.getElementById('app').innerHTML = `
+    <div class="panel"><div class="apphead">
+      <img src="/api/apps/${a.id}/icon" alt="">
+      <div><h2 style="margin:0">${esc(a.name)}</h2>
+      <div class="muted">${esc(a.developer_name)} · ${esc(a.category)} · v${esc(a.version)} · <span class="badge ${a.status}">${a.status}</span></div>
+      <div>${stars(a.avg_rating, a.review_count)}</div></div>
+    </div>
+    <p style="white-space:pre-wrap;margin-top:14px">${esc(a.description)}</p>
+    <div class="row" style="margin-top:14px">
+      ${a.price_cents === 0
+        ? `<button class="btn" id="dl">⬇ Download free</button>`
+        : (a.owned
+          ? `<button class="btn" id="dl">⬇ Download (purchased)</button>`
+          : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>`)}
+      <span class="muted">${a.download_count} downloads</span>
+    </div>
+    <div id="payinfo" class="muted" style="margin-top:8px"></div>
+    </div>`;
+  const dl = document.getElementById('dl');
+  if (dl) dl.onclick = () => { location.href = '/api/apps/' + id + '/download'; setTimeout(load, 1500); };
+  const buy = document.getElementById('buy');
+  if (buy) buy.onclick = async () => {
+    try {
+      const r = await api('/api/purchase', { method: 'POST', body: { app_id: Number(id) } });
+      document.getElementById('payinfo').innerHTML =
+        `<div class="okmsg">✅ ${r.demoBanner}<br>Paid ${esc(r.gross)} → developer ${esc(r.developer_share)} · platform fee ${esc(r.platform_fee)}.</div>`;
+      setTimeout(load, 1200);
+    } catch (e) { showErr(document.getElementById('msg'), e.message); }
+  };
+  document.getElementById('reviews').innerHTML = d.reviews.length
+    ? d.reviews.map(r => `<p><b>${esc(r.username)}</b> <span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span><br>${esc(r.text)}<br><span class="muted">${esc(r.created_at)}</span></p>`).join('')
+    : '<p class="muted">No reviews yet — be the first.</p>';
+  const u = await me();
+  document.getElementById('revform').innerHTML = u
+    ? `<label class="f">Your rating</label><select class="f" id="rr"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select>
+       <label class="f">Review</label><textarea class="f" id="rt"></textarea>
+       <button class="btn" id="rsend" style="margin-top:8px">Post review</button>`
+    : '<p class="muted"><a href="/login.html">Sign in</a> to leave a review.</p>';
+  const rs = document.getElementById('rsend');
+  if (rs) rs.onclick = async () => {
+    try {
+      await api('/api/apps/' + id + '/reviews', { method: 'POST', body: { rating: Number(document.getElementById('rr').value), text: document.getElementById('rt').value } });
+      load();
+    } catch (e) { showErr(document.getElementById('msg'), e.message); }
+  };
+}
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await load(); })();
+</script>
+</body>
+</html>

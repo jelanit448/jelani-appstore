@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Developer dashboard — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="demo"></div><div id="msg"></div>
+  <div class="panel" id="become" style="display:none"><h2>Become a developer</h2>
+    <p class="muted">Developers can upload apps and earn 90% of every sale.</p>
+    <button class="btn" id="go">Become a developer</button></div>
+  <div class="panel"><h2>My apps</h2><div id="apps"></div>
+    <p><a class="btn" href="/upload.html" style="text-decoration:none">＋ Upload new app</a></p></div>
+  <div class="panel"><h2>Earnings (90% of sales, net of refunds)</h2><div id="earn"></div></div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+async function load() {
+  const u = await me();
+  if (!u) { location.href = '/login.html'; return; }
+  if (u.role === 'user') { document.getElementById('become').style.display = ''; }
+  document.getElementById('go').onclick = async () => {
+    await api('/api/become-developer', { method: 'POST' }); location.reload();
+  };
+  try {
+    const d = await api('/api/dev/apps');
+    document.getElementById('apps').innerHTML = d.apps.length ? `<table><tr><th>App</th><th>Version</th><th>Price</th><th>Status</th><th>Downloads</th></tr>` +
+      d.apps.map(a => `<tr><td><a href="/app.html?id=${a.id}">${esc(a.name)}</a></td><td>${esc(a.version)}</td><td>${a.price_cents ? '$' + (a.price_cents / 100).toFixed(2) : 'Free'}</td><td><span class="badge ${a.status}">${a.status}</span></td><td>${a.download_count}</td></tr>`).join('') + `</table>`
+      : '<p class="muted">No apps yet.</p>';
+  } catch (e) { document.getElementById('apps').innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  try {
+    const e2 = await api('/api/dev/earnings');
+    document.getElementById('earn').innerHTML = e2.earnings.length ? `<table><tr><th>App</th><th>Sales</th><th>Refunds</th><th>Owed to you</th></tr>` +
+      e2.earnings.map(r => `<tr><td>${esc(r.name)}</td><td>${r.sales}</td><td>${r.refunds}</td><td><b>$${(r.net_cents / 100).toFixed(2)}</b></td></tr>`).join('') + `</table>`
+      : '<p class="muted">No sales yet.</p>';
+  } catch (e) { /* not a developer yet */ }
+}
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await load(); })();
+</script>
+</body>
+</html>

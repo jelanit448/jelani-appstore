@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payouts &amp; security — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="demo"></div><div id="msg"></div>
+  <div class="panel" id="pwpanel" style="display:none"><h2>Change password (required)</h2>
+    <label class="f">Current password</label><input class="f" id="cur" type="password">
+    <label class="f">New password (8+ characters)</label><input class="f" id="nxt" type="password">
+    <button class="btn" id="pwgo" style="margin-top:8px">Change password</button></div>
+  <div class="panel"><h2>Payout settings</h2>
+    <p class="muted" id="kycstat"></p>
+    <p><b>How real payouts work:</b> connect Stripe (see README), verify your identity below, then payouts go to your bank via Stripe Connect. Until then, everything is demo-only.</p>
+    <label class="f">Identity note (name / ID type — stored for manual review)</label>
+    <textarea class="f" id="kycnote" placeholder="e.g. Government ID verified in person on 2026-10-11"></textarea>
+    <button class="btn" id="kycgo" style="margin-top:8px">Submit for KYC review</button>
+  </div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await renderHeader();
+  document.getElementById('demo').innerHTML = demoBanner();
+  const q = new URLSearchParams(location.search);
+  const d = await api('/api/me');
+  if (q.get('changepw') === '1' || d.must_change_password) document.getElementById('pwpanel').style.display = '';
+  document.getElementById('pwgo').onclick = async () => {
+    try { await api('/api/change-password', { method: 'POST', body: { current: document.getElementById('cur').value, next: document.getElementById('nxt').value } }); showOk(document.getElementById('msg'), 'Password changed.'); }
+    catch (e) { showErr(document.getElementById('msg'), e.message); }
+  };
+  const k = await api('/api/kyc');
+  document.getElementById('kycstat').innerHTML = `KYC status: <b>${esc(k.kyc_status)}</b> · Stripe: ${k.stripeConfigured ? 'connected' : '<b>not connected (demo mode)</b>'}<br><span class="muted">${esc(k.demoNote)}</span>`;
+  document.getElementById('kycgo').onclick = async () => {
+    await api('/api/kyc', { method: 'POST', body: { note: document.getElementById('kycnote').value } });
+    location.reload();
+  };
+})();
+</script>
+</body>
+</html>

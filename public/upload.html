@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Upload app — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div class="panel">
+    <h2>Upload an app</h2>
+    <p class="muted">Large files are uploaded in 5MB chunks and resume automatically if your connection drops. New apps go to the owner for approval before they appear in the store.</p>
+    <div id="msg"></div>
+    <label class="f">App name</label><input class="f" id="name">
+    <label class="f">Description</label><textarea class="f" id="desc"></textarea>
+    <div class="row">
+      <div style="flex:1"><label class="f">Category</label><input class="f" id="cat" value="Tools"></div>
+      <div style="flex:1"><label class="f">Version</label><input class="f" id="ver" value="1.0"></div>
+      <div style="flex:1"><label class="f">Price (USD, 0 = free)</label><input class="f" id="price" type="number" min="0" step="0.01" value="0"></div>
+    </div>
+    <label class="f">App file (.apk / .aab / .zip — up to 2GB)</label><input class="f" id="file" type="file" accept=".apk,.aab,.zip">
+    <div class="checkline"><input type="checkbox" id="attest"><label for="attest"><b>Copyright attestation (required):</b> I own the rights to this app, or I have a license to distribute it. I understand infringing uploads are removed and repeat infringers are banned (see <a href="/terms.html">Terms</a>).</label></div>
+    <div class="progress"><div id="bar"></div></div>
+    <div class="muted" id="pstat"></div>
+    <button class="btn" id="up" style="margin-top:10px">Upload &amp; submit for review</button>
+  </div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+const CHUNK = 5 * 1024 * 1024;
+async function uploadChunked(file, kind) {
+  const initRes = await fetch('/api/upload/init', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, size_bytes: file.size, kind }) });
+  const init = await initRes.json();
+  if (!initRes.ok) throw new Error(init.error || 'init failed');
+  const total = Math.ceil(file.size / CHUNK);
+  for (let i = 0; i < total; i++) {
+    const blob = file.slice(i * CHUNK, (i + 1) * CHUNK);
+    const r = await fetch(`/api/upload/chunk?upload_id=${init.upload_id}&index=${i}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: blob });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('chunk ' + i + ' failed'));
+    const pct = Math.round(((i + 1) / total) * 100);
+    document.getElementById('bar').style.width = pct + '%';
+    document.getElementById('pstat').textContent = `Uploading ${file.name}: ${pct}% (chunk ${i + 1}/${total})`;
+  }
+  return init.upload_id;
+}
+document.getElementById('up').onclick = async () => {
+  const msg = document.getElementById('msg');
+  try {
+    const file = document.getElementById('file').files[0];
+    if (!file) throw new Error('Choose an app file first.');
+    if (!document.getElementById('attest').checked) throw new Error('Copyright attestation is required.');
+    document.getElementById('up').disabled = true;
+    const upload_id = await uploadChunked(file, 'appfile');
+    const price = Math.round(parseFloat(document.getElementById('price').value || '0') * 100);
+    const d = await api('/api/upload/complete', { method: 'POST', body: {
+      upload_id, name: document.getElementById('name').value, description: document.getElementById('desc').value,
+      category: document.getElementById('cat').value, version: document.getElementById('ver').value,
+      price_cents: price, copyright_attested: true,
+    }});
+    showOk(msg, '✅ Submitted! Status: pending — the owner will review it before it goes live.');
+    document.getElementById('pstat').textContent = '';
+  } catch (e) { showErr(msg, e.message); document.getElementById('up').disabled = false; }
+};
+(async () => { await renderHeader(); })();
+</script>
+</body>
+</html>

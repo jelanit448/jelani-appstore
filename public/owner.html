@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Owner console — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="demo"></div><div id="msg"></div>
+  <div class="panel"><h2>Moderation queue</h2><div id="queue"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>Finance — every cent reconciled</h2><div id="fin"><p class="muted">Loading…</p></div></div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+async function loadQueue() {
+  try {
+    const d = await api('/api/owner/pending');
+    document.getElementById('queue').innerHTML = d.pending.length ? d.pending.map(a => `
+      <div class="panel" style="margin:10px 0"><b>${esc(a.name)}</b> v${esc(a.version)} · ${esc(a.category)} · by ${esc(a.developer_name)}
+      <br><span class="muted">${esc((a.description || '').slice(0, 200))}</span>
+      <br><span class="muted">Price: ${a.price_cents ? '$' + (a.price_cents / 100).toFixed(2) : 'Free'} · ${(a.file_size / 1048576).toFixed(1)} MB · © attested: ${a.copyright_attested ? 'yes' : 'NO'}</span>
+      <div class="row" style="margin-top:8px"><button class="btn" onclick="mod(${a.id},true)">Approve</button>
+      <button class="btn danger" onclick="mod(${a.id},false)">Reject</button></div></div>`).join('')
+      : '<p class="muted">Queue is empty. 🎉</p>';
+  } catch (e) { document.getElementById('queue').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function mod(id, approve) {
+  const reason = approve ? '' : (prompt('Rejection reason:') || '');
+  await api('/api/owner/approve', { method: 'POST', body: { app_id: id, approve, reason } });
+  loadQueue();
+}
+async function loadFin() {
+  try {
+    const f = await api('/api/owner/finance');
+    const t = Object.fromEntries(f.totals.map(x => [x.type, x]));
+    const fmt = (c) => '$' + (c / 100).toFixed(2);
+    document.getElementById('fin').innerHTML = `
+      <table><tr><th>Type</th><th>Count</th><th>Gross</th><th>Platform fees (10%)</th><th>Developer net</th></tr>
+      ${f.totals.map(x => `<tr><td>${esc(x.type)}</td><td>${x.n}</td><td>${fmt(x.gross)}</td><td>${fmt(x.fees)}</td><td>${fmt(x.net)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No transactions yet.</td></tr>'}</table>
+      <h3>Owed to developers</h3>
+      ${f.perDeveloper.length ? `<table><tr><th>Developer</th><th>Owed</th></tr>` + f.perDeveloper.map(p => `<tr><td>${esc(p.developer)}</td><td><b>${fmt(p.owed_cents)}</b></td></tr>`).join('') + `</table>` : '<p class="muted">Nothing owed.</p>'}
+      <h3>Reconciliation check</h3>
+      ${f.reconciliation.ok
+        ? `<div class="okmsg">✅ ${f.reconciliation.checked} ledger row(s) checked — every fee matches the 90/10 split. No missing fees.</div>`
+        : `<div class="err">❌ ${f.reconciliation.mismatches.length} problem(s):<br>` + f.reconciliation.mismatches.map(m => `#${m.ledger_id} (${esc(m.type)}): ${esc(m.problem)}`).join('<br>') + `</div>`}
+      <p class="muted">Stripe connected: ${f.stripeConfigured ? 'yes' : 'no — demo mode'}. ${esc(f.demoBanner)}</p>`;
+  } catch (e) { document.getElementById('fin').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadFin(); })();
+</script>
+</body>
+</html>

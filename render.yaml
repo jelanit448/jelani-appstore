@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: jelani-appstore
+    runtime: docker
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: appstore-data
+      mountPath: /app/data
+      sizeGB: 1
