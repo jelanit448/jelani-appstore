@@ -54,6 +54,80 @@ app.use(
     cookie: { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 3600 * 1000 },
   })
 );
+// Stripe webhook: needs the RAW body for signature verification, so it is
+// mounted here with express.raw() BEFORE the global JSON parser (which would
+// otherwise consume the raw bytes and break signature checks). It also has
+// no session (Stripe calls it), so it is in TERMS_ALLOWLIST below.
+app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  try {
+    event = stripe.constructEvent(req.body, sig);
+  } catch (e) {
+    return res.status(400).json({ error: 'Bad webhook signature.' });
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      const meta = session.metadata || {};
+      if (meta.kind !== 'app_purchase') return res.json({ ok: true, ignored: true });
+      const row = db.prepare('SELECT * FROM stripe_sessions WHERE session_id = ?').get(session.id);
+      if (!row) return res.json({ ok: true, ignored: true }); // unknown session
+      if (row.status === 'completed') return res.json({ ok: true, duplicate: true }); // idempotent retry
+
+      const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(row.app_id);
+      if (!appRow || appRow.status !== 'approved' || appRow.price_cents !== row.amount_cents) {
+        return res.json({ ok: true, ignored: true }); // price/app changed mid-checkout — no charge recorded
+      }
+      const { developer, platform } = money.split(row.amount_cents);
+      const piId = typeof session.payment_intent === 'string' ? session.payment_intent : session.id;
+      const note = `Stripe payment ${piId} — real money`;
+      const tx = txn(db, () => {
+        const li = db.prepare(
+          `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+           VALUES ('purchase',?,?,?,?,?,?,?)`
+        ).run(row.app_id, row.buyer_id, appRow.developer_id, row.amount_cents, platform, developer, note);
+        db.prepare('INSERT OR IGNORE INTO purchases (app_id, buyer_id, ledger_id) VALUES (?,?,?)')
+          .run(row.app_id, row.buyer_id, li.lastInsertRowid);
+        db.prepare(`UPDATE stripe_sessions SET status = 'completed', payment_intent = COALESCE(payment_intent, ?), ledger_id = ? WHERE id = ?`)
+          .run(typeof session.payment_intent === 'string' ? session.payment_intent : null, li.lastInsertRowid, row.id);
+        return li.lastInsertRowid;
+      });
+      return res.json({ ok: true, ledger_id: tx });
+    }
+
+    if (event.type === 'charge.refunded') {
+      const charge = event.data.object;
+      const pi = charge.payment_intent;
+      const row = pi && db.prepare(
+        `SELECT * FROM stripe_sessions WHERE payment_intent = ? AND status = 'completed'`
+      ).get(typeof pi === 'string' ? pi : pi.id);
+      if (row && row.ledger_id) {
+        const prow = db.prepare(`SELECT * FROM ledger WHERE id = ? AND type = 'purchase'`).get(row.ledger_id);
+        if (prow) {
+          txn(db, () => {
+            db.prepare(
+              `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+               VALUES ('refund',?,?,?,?,?,?,?)`
+            ).run(prow.app_id, prow.buyer_id, prow.developer_id,
+              -prow.gross_cents, -prow.fee_cents, -prow.net_cents,
+              `Stripe refund of ledger #${prow.id}`);
+            db.prepare('DELETE FROM purchases WHERE ledger_id = ?').run(prow.id);
+            db.prepare(`UPDATE stripe_sessions SET status = 'refunded' WHERE id = ?`).run(row.id);
+          });
+        }
+      }
+      return res.json({ ok: true });
+    }
+
+    return res.json({ ok: true, ignored: true });
+  } catch (e) {
+    console.error('[stripe-webhook]', e.message);
+    return res.status(500).json({ error: 'Webhook handler failed.' });
+  }
+});
+
 app.use(express.json({ limit: '1mb' }));
 
 // ---------------------------------------------------------------------------
@@ -85,6 +159,13 @@ function validEmail(v) { return typeof v === 'string' && /^[^\s@]+@[^\s@]+\.[^\s
 function toId(v) {
   const n = Number(v);
   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+// Base URL for Stripe redirect URLs. Set PUBLIC_URL in production;
+// falls back to the request host (works on Render out of the box).
+function publicUrl(req) {
+  const base = (process.env.PUBLIC_URL || (req.protocol + '://' + req.get('host'))).replace(/\/+$/, '');
+  return base;
 }
 function safeFileName(v) {
   const base = path.basename(String(v || 'file')).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -143,7 +224,7 @@ function requireRole(role) {
 // never forced existing accounts through new legal screens.
 const TERMS_ALLOWLIST = new Set([
   '/api/me', '/api/accept-terms', '/api/logout', '/api/config',
-  '/api/change-password',
+  '/api/change-password', '/api/webhook/stripe',
 ]);
 function requireTermsFresh(req, res, next) {
   if (!req.user) return next();
@@ -161,7 +242,7 @@ app.use(requireTermsFresh);
 // ---------------------------------------------------------------------------
 app.get('/api/config', (req, res) => {
   res.json({
-    demoMode: true,
+    demoMode: !stripe.configured,
     demoBanner: money.DEMO_BANNER,
     stripeConfigured: stripe.configured,
     termsVersion: TERMS_VERSION,
@@ -525,6 +606,16 @@ app.post('/api/purchase', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }
   const already = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(appRow.id, req.user.id);
   if (already) return res.status(409).json({ error: 'Already purchased.' });
 
+  // Real money: demo purchases are OFF once Stripe is connected. The buyer
+  // must go through Stripe Checkout so a real charge exists behind the ledger.
+  if (stripe.configured) {
+    return res.status(402).json({
+      error: 'Real payments are enabled — check out with Stripe to buy this app.',
+      checkout: '/api/purchase/checkout',
+      app_id: appRow.id,
+    });
+  }
+
   // Single split definition — lib/money.js. No second "ticket value" anywhere.
   const { developer, platform } = money.split(appRow.price_cents);
   const note = `DEMO purchase — ${money.DEMO_BANNER}`;
@@ -551,9 +642,58 @@ app.post('/api/purchase', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }
   });
 });
 
+// Real-money checkout: create a Stripe Checkout Session for one paid app.
+// The ledger row is written by the webhook on checkout.session.completed,
+// AFTER Stripe confirms the charge — never here.
+app.post('/api/purchase/checkout', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), async (req, res) => {
+  if (!stripe.configured) {
+    const err = new Error('Real payments are not connected yet — demo mode only.');
+    err.code = 'STRIPE_UNCONFIGURED';
+    return res.status(503).json({ error: err.message, code: err.code, fallback: '/api/purchase' });
+  }
+  const appId = toId((req.body || {}).app_id);
+  if (!appId) return res.status(404).json({ error: 'App not found.' });
+  const appRow = q.appById.get(appId);
+  if (!appRow || appRow.status !== 'approved') return res.status(404).json({ error: 'App not found.' });
+  if (appRow.price_cents <= 0) return res.status(400).json({ error: 'This app is free — just download it.' });
+  if (appRow.developer_id === req.user.id) return res.status(400).json({ error: 'You cannot buy your own app.' });
+  const already = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(appRow.id, req.user.id);
+  if (already) return res.status(409).json({ error: 'Already purchased.' });
+
+  const base = publicUrl(req);
+  try {
+    const { id: sessionId, url } = await stripe.createCheckoutSession({
+      appId: appRow.id,
+      buyerId: req.user.id,
+      appName: `${appRow.name} — Jelani's App Store`,
+      amountCents: appRow.price_cents,
+      successUrl: `${base}/purchase-success.html?session_id={CHECKOUT_SESSION_ID}&app_id=${appRow.id}`,
+      cancelUrl: `${base}/app.html?id=${appRow.id}&cancelled=1`,
+    });
+    db.prepare(
+      `INSERT INTO stripe_sessions (session_id, app_id, buyer_id, amount_cents, status)
+       VALUES (?,?,?,?, 'pending')`
+    ).run(sessionId, appRow.id, req.user.id, appRow.price_cents);
+    res.json({ ok: true, checkout_url: url, session_id: sessionId });
+  } catch (e) {
+    console.error('[stripe-checkout]', e.message);
+    res.status(502).json({ error: 'Could not start checkout. Please try again.' });
+  }
+});
+
+// Checkout status for the success page: poll until the webhook completes it.
+app.get('/api/purchase/session-status', requireAuth, (req, res) => {
+  const sid = String(req.query.session_id || '').slice(0, 200);
+  if (!sid) return res.status(400).json({ error: 'Missing session_id.' });
+  const row = db.prepare('SELECT * FROM stripe_sessions WHERE session_id = ? AND buyer_id = ?').get(sid, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Checkout session not found.' });
+  const owned = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(row.app_id, req.user.id);
+  res.json({ ok: true, status: row.status, owned: Boolean(owned), app_id: row.app_id });
+});
+
 // Refunds: owner or the app's developer. Writes a negative ledger row so the
 // books always reconcile; never deletes the original row.
-app.post('/api/refund', requireAuth, (req, res) => {
+app.post('/api/refund', requireAuth, async (req, res) => {
   const ledgerId = toId((req.body || {}).ledger_id);
   if (!ledgerId) return res.status(404).json({ error: 'Purchase not found.' });
   const row = db.prepare('SELECT * FROM ledger WHERE id = ? AND type = \'purchase\'').get(ledgerId);
@@ -562,16 +702,31 @@ app.post('/api/refund', requireAuth, (req, res) => {
   const allowed = req.user.role === 'owner' || (appRow && appRow.developer_id === req.user.id);
   if (!allowed) return res.status(403).json({ error: 'Only the owner or the app developer can refund.' });
 
+  // Real money? Push the refund through Stripe FIRST, then write the books.
+  const sess = db.prepare(`SELECT * FROM stripe_sessions WHERE ledger_id = ? AND status = 'completed'`).get(row.id);
+  let refundedVia = 'demo';
+  if (sess && sess.payment_intent) {
+    if (!stripe.configured) return res.status(503).json({ error: 'Stripe is not connected — cannot refund real money.' });
+    try {
+      await stripe.refundPayment({ paymentIntentId: sess.payment_intent, amountCents: row.gross_cents });
+      refundedVia = 'stripe';
+    } catch (e) {
+      console.error('[stripe-refund]', e.message);
+      return res.status(502).json({ error: 'Stripe refund failed — nothing was written to the ledger.' });
+    }
+  }
+
   const tx = txn(db, () => {
     const li = db.prepare(
       `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
        VALUES ('refund',?,?,?,?,?,?,?)`
     ).run(row.app_id, row.buyer_id, row.developer_id, -row.gross_cents, -row.fee_cents, -row.net_cents,
-      `Refund of ledger #${row.id}`);
+      `Refund of ledger #${row.id}${refundedVia === 'stripe' ? ' via Stripe' : ''}`);
     db.prepare('DELETE FROM purchases WHERE ledger_id = ?').run(row.id);
+    if (sess) db.prepare(`UPDATE stripe_sessions SET status = 'refunded' WHERE id = ?`).run(sess.id);
     return li.lastInsertRowid;
   });
-  res.json({ ok: true, refund_ledger_id: tx, demo: true });
+  res.json({ ok: true, refund_ledger_id: tx, demo: refundedVia === 'demo', refunded_via: refundedVia });
 });
 
 // Developer: my apps + earnings (net of refunds).
