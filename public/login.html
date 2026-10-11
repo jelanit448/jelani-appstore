@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main><div class="panel" style="max-width:420px;margin:40px auto">
+  <h2>Sign in</h2><div id="msg"></div>
+  <label class="f">Username</label><input class="f" id="u" autocomplete="username">
+  <label class="f">Password</label><input class="f" id="p" type="password" autocomplete="current-password">
+  <button class="btn" id="go" style="margin-top:12px;width:100%">Sign in</button>
+  <p class="muted">No account? <a href="/signup.html">Sign up</a></p>
+</div></main>
+<script src="/js/common.js"></script>
+<script>
+document.getElementById('go').onclick = async () => {
+  try {
+    const d = await api('/api/login', { method: 'POST', body: { username: document.getElementById('u').value, password: document.getElementById('p').value } });
+    if (d.must_change_password) { location.href = '/kyc.html?changepw=1'; return; }
+    if (d.must_accept_terms) { location.href = '/terms.html?must=1&next=/'; return; }
+    location.href = '/';
+  } catch (e) { showErr(document.getElementById('msg'), e.message); }
+};
+(async () => { await renderHeader(); })();
+</script>
+</body>
+</html>
