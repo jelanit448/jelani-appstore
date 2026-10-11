@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment confirmed — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div class="panel" id="box"><p class="muted">Confirming your payment with Stripe…</p></div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await renderHeader();
+  const q = new URLSearchParams(location.search);
+  const sid = q.get('session_id'), appId = q.get('app_id');
+  const box = document.getElementById('box');
+  if (!sid || !appId) { box.innerHTML = '<p>Missing checkout info. <a href="/">Back to store</a></p>'; return; }
+  // The webhook usually lands within seconds; poll for up to ~60s.
+  for (let i = 0; i < 20; i++) {
+    try {
+      const d = await api('/api/purchase/session-status?session_id=' + encodeURIComponent(sid));
+      if (d.status === 'completed' || d.owned) {
+        box.innerHTML = `<h2>✅ Payment confirmed</h2>
+          <p>Your purchase went through. <a class="btn" href="/app.html?id=${encodeURIComponent(appId)}">Download the app</a></p>`;
+        return;
+      }
+      if (d.status === 'refunded') {
+        box.innerHTML = '<p>This payment was refunded. <a href="/">Back to store</a></p>';
+        return;
+      }
+    } catch (e) { /* keep polling */ }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  box.innerHTML = `<p class="muted">Still confirming — Stripe sometimes takes a minute.
+    Your app will unlock automatically. <a href="/app.html?id=${esc(appId)}">Check the app page</a></p>`;
+})();
+</script>
+</body>
+</html>
