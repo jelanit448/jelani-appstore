@@ -35,7 +35,7 @@ if (!process.env.SESSION_SECRET) {
 }
 
 const ROOT = __dirname;
-const UPLOAD_DIR = path.join(ROOT, 'uploads');
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(ROOT, 'uploads');
 const TMP_DIR = path.join(ROOT, 'data', 'tmp');
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB suggested client chunk
@@ -478,6 +478,38 @@ app.post('/api/upload/complete', requireAuth, (req, res) => {
   }
 
   res.json({ ok: true, app_id: appId, status: 'pending', message: 'Uploaded. Waiting for owner approval.' });
+});
+
+// Owner-only: swap the package file on an EXISTING listing (e.g. replace the
+// seeded placeholder with the real production build). The file must first be
+// sent through the normal chunked upload flow (/api/upload/init → chunk →
+// complete-data via upload_id); this endpoint just re-points the listing.
+app.post('/api/owner/apps/:id/replace-file', requireRole('owner'), (req, res) => {
+  const { upload_id, version } = req.body || {};
+  const meta = readMeta(upload_id);
+  if (!meta || meta.user_id !== req.user.id || meta.kind !== 'appfile') {
+    return res.status(404).json({ error: 'Upload not found.' });
+  }
+  if (meta.received_bytes !== meta.size_bytes) {
+    return res.status(400).json({ error: `Incomplete upload: ${meta.received_bytes}/${meta.size_bytes} bytes.` });
+  }
+  const id = toId(req.params.id);
+  const appRow = id ? q.appById.get(id) : null;
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const finalName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${meta.filename}`;
+  const finalPath = path.join(UPLOAD_DIR, finalName);
+  fs.renameSync(uploadPart(upload_id), finalPath);
+  fs.unlinkSync(uploadMeta(upload_id));
+  const oldPath = appRow.file_path;
+  db.prepare('UPDATE apps SET file_path = ?, file_size = ? WHERE id = ?')
+    .run(finalPath, meta.size_bytes, appRow.id);
+  if (version) {
+    db.prepare('UPDATE apps SET version = ? WHERE id = ?').run(String(version).slice(0, 20), appRow.id);
+  }
+  if (oldPath && oldPath !== finalPath) {
+    try { if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath); } catch { /* best effort */ }
+  }
+  res.json({ ok: true, app_id: appRow.id, file_size: meta.size_bytes });
 });
 
 // ---------------------------------------------------------------------------
