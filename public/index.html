@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div class="hero"><h1>Apps by independent developers</h1><p>Download apps, support developers directly — 90% of every paid sale goes to the developer.</p></div>
+  <div id="demo"></div>
+  <div class="searchbar">
+    <input id="q" placeholder="Search apps…">
+    <select id="cat"><option value="">All categories</option></select>
+    <button class="btn" id="go">Search</button>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="grid" id="grid"></div>
+  <p class="muted" id="count"></p>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+let activeCat = '';
+async function loadCats() {
+  const d = await api('/api/categories');
+  const sel = document.getElementById('cat');
+  const chips = document.getElementById('chips');
+  chips.innerHTML = `<span class="chip${activeCat === '' ? ' active' : ''}" data-c="">All</span>` +
+    d.categories.map(c => `<span class="chip${activeCat === c ? ' active' : ''}" data-c="${esc(c)}">${esc(c)}</span>`).join('');
+  sel.innerHTML = '<option value="">All categories</option>' + d.categories.map(c => `<option ${activeCat === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  chips.querySelectorAll('.chip').forEach(ch => ch.onclick = () => { activeCat = ch.dataset.c; loadCats(); load(); });
+  sel.onchange = () => { activeCat = sel.value; loadCats(); load(); };
+}
+async function load() {
+  const q = document.getElementById('q').value.trim();
+  const params = new URLSearchParams();
+  if (q) params.set('search', q);
+  if (activeCat) params.set('category', activeCat);
+  const d = await api('/api/apps?' + params.toString());
+  const grid = document.getElementById('grid');
+  document.getElementById('count').textContent = d.apps.length + ' app(s)';
+  grid.innerHTML = d.apps.map(a => `
+    <div class="card" onclick="location.href='/app.html?id=${a.id}'">
+      <img class="icon" src="/api/apps/${a.id}/icon" alt="">
+      <div><div class="t">${esc(a.name)}</div>
+      <div class="d">${esc(a.developer_name)} · ${esc(a.category)} · v${esc(a.version)}</div>
+      <div>${stars(a.avg_rating, a.review_count)}</div>
+      <div class="p">${a.price_cents === 0 ? '<b style="color:var(--green-dark)">Free</b>' : '<b>$' + (a.price_cents / 100).toFixed(2) + '</b>'} · ${a.download_count} downloads</div></div>
+    </div>`).join('') || '<p class="muted">No apps found.</p>';
+}
+document.getElementById('go').onclick = load;
+document.getElementById('q').onkeydown = (e) => { if (e.key === 'Enter') load(); };
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadCats(); await load(); })();
+</script>
+</body>
+</html>
