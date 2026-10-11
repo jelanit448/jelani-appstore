@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terms of Service — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main><div class="panel">
+  <h2>Terms of Service <span class="muted">(version 2026-10-11.v1)</span></h2>
+  <div id="must" style="display:none"><div class="demo-banner">📢 Our Terms were updated. Please read and accept to keep using the store — this applies to <b>all</b> accounts, including existing ones.</div>
+    <div class="checkline"><input type="checkbox" id="acc"><label for="acc"><b>I have read and accept the Terms of Service and Privacy Policy.</b></label></div>
+    <button class="btn" id="go">Accept &amp; continue</button><div id="msg"></div><hr></div>
+  <h3>1. The store</h3>
+  <p>Jelani's App Store lets developers publish apps and users download them. The store is operated by Jelani Thompson.</p>
+  <h3>2. Age</h3><p>You must be 13 or older to use the store.</p>
+  <h3>3. Developer terms</h3>
+  <p>Developers keep <b>90%</b> of every paid sale; the platform keeps a <b>10%</b> fee. All amounts are in USD cents; one credit equals one cent. Until Stripe is connected, all balances are <b>demo records, not withdrawable money</b>.</p>
+  <h3>4. Copyright &amp; DMCA</h3>
+  <p>Upload only apps you own or are licensed to distribute. Every upload requires a copyright attestation. To report infringement, email the operator with the app name, your work, and your contact info; valid reports lead to removal, and repeat infringers are banned.</p>
+  <h3>5. Refunds &amp; fraud</h3>
+  <p>Refunds may be issued by the owner or the app's developer and are recorded in the public ledger math. Chargebacks, stolen payment methods, and fake reviews lead to account termination.</p>
+  <h3>6. Acceptable use</h3>
+  <p>No malware, spyware, or deceptive apps. The owner may remove any app that harms users.</p>
+  <h3>7. Changes</h3>
+  <p>When these Terms change, every account — new and existing — must accept the new version before continuing.</p>
+</div></main>
+<footer><a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await renderHeader();
+  const q = new URLSearchParams(location.search);
+  if (q.get('must') === '1') {
+    document.getElementById('must').style.display = '';
+    document.getElementById('go').onclick = async () => {
+      if (!document.getElementById('acc').checked) { showErr(document.getElementById('msg'), 'Please check the acceptance box.'); return; }
+      try {
+        await api('/api/accept-terms', { method: 'POST', body: { accept: true } });
+        location.href = q.get('next') || '/';
+      } catch (e) { showErr(document.getElementById('msg'), e.message); }
+    };
+  }
+})();
+</script>
+</body>
+</html>
