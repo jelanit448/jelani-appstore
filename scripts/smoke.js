@@ -210,6 +210,32 @@ async function main() {
     check('review visible publicly', d.status === 200 && d.data.reviews.some((x) => x.text === 'Great game!'));
   }
 
+  // 14. Stripe routes in DEMO mode (no STRIPE_SECRET_KEY in this env)
+  {
+    const anon = makeClient();
+    const cfg = await anon.req('GET', '/api/config');
+    check('config reports demoMode when Stripe not connected',
+      cfg.data.demoMode === true && cfg.data.stripeConfigured === false, JSON.stringify(cfg.data));
+
+    // checkout creation is refused in demo mode, with a demo fallback pointer
+    const co = await alice.req('POST', '/api/purchase/checkout', { app_id: appId });
+    check('checkout returns 503 STRIPE_UNCONFIGURED in demo mode',
+      co.status === 503 && co.data.code === 'STRIPE_UNCONFIGURED' && co.data.fallback === '/api/purchase',
+      `status=${co.status}`);
+
+    // webhook rejects unsigned/forged payloads
+    const wh = await anon.req('POST', '/api/webhook/stripe',
+      undefined,
+      JSON.stringify({ type: 'checkout.session.completed' }));
+    check('webhook rejects bad signature (400)', wh.status === 400, `status=${wh.status}`);
+
+    // session-status needs auth and a real session id
+    const ss0 = await anon.req('GET', '/api/purchase/session-status?session_id=nope');
+    check('session-status requires auth', ss0.status === 401 || ss0.status === 403, `status=${ss0.status}`);
+    const ss1 = await alice.req('GET', '/api/purchase/session-status?session_id=cs_bogus');
+    check('session-status 404 for unknown session', ss1.status === 404, `status=${ss1.status}`);
+  }
+
   console.log(failures === 0 ? '\nALL CHECKS PASSED ✅' : `\n${failures} CHECK(S) FAILED ❌`);
   process.exit(failures === 0 ? 0 : 1);
 }
