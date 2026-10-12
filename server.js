@@ -29,6 +29,9 @@ const money = require('./lib/money');
 const stripe = require('./lib/stripe');
 
 const PORT = process.env.PORT || 3000;
+// Owner's Cash App $cashtag for manual payments (no Stripe/ID needed).
+// Override with the CASHAPP_CASHTAG env var on Render if it ever changes.
+const CASHAPP_CASHTAG = process.env.CASHAPP_CASHTAG || '$JelaniThompson2';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-secret-change-me-in-production';
 if (!process.env.SESSION_SECRET) {
   console.warn('[warn] SESSION_SECRET not set — using dev default. Set it in production.');
@@ -703,6 +706,142 @@ app.get('/api/purchase/session-status', requireAuth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Checkout session not found.' });
   const owned = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(row.app_id, req.user.id);
   res.json({ ok: true, status: row.status, owned: Boolean(owned), app_id: row.app_id });
+});
+
+// ---- Manual Cash App payments (no Stripe, no ID verification needed) ----
+// Buyer pays the owner's $cashtag inside their own Cash App, then claims the
+// order with their $cashtag. The owner approves in the dashboard after seeing
+// the payment; only approval writes the ledger + purchase rows.
+
+function cashappAppCheck(appId, buyerId) {
+  const appRow = q.appById.get(appId);
+  if (!appRow || appRow.status !== 'approved') return { error: 'App not found.', code: 404 };
+  if (appRow.price_cents <= 0) return { error: 'This app is free — just download it.', code: 400 };
+  if (appRow.developer_id === buyerId) return { error: 'You cannot buy your own app.', code: 400 };
+  const already = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(appRow.id, buyerId);
+  if (already) return { error: 'Already purchased.', code: 409 };
+  return { appRow };
+}
+
+const CASHTAG_RE = /^\$[A-Za-z0-9_]{1,20}$/;
+
+// Start a Cash App order: returns what to pay and where.
+app.post('/api/purchase/cashapp/init', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
+  const appId = toId((req.body || {}).app_id);
+  if (!appId) return res.status(404).json({ error: 'App not found.' });
+  const check = cashappAppCheck(appId, req.user.id);
+  if (check.error) return res.status(check.code).json({ error: check.error });
+  const existing = db.prepare(
+    `SELECT * FROM cashapp_orders WHERE app_id = ? AND buyer_id = ? AND status IN ('pending','claimed','approved')`
+  ).get(check.appRow.id, req.user.id);
+  if (existing) {
+    return res.json({
+      ok: true, order_id: existing.id, status: existing.status,
+      cashtag: CASHAPP_CASHTAG, amount_cents: existing.amount_cents,
+      amount: money.formatUsd(existing.amount_cents), resumed: true,
+    });
+  }
+  const info = db.prepare(
+    `INSERT INTO cashapp_orders (app_id, buyer_id, amount_cents, status) VALUES (?,?,?,'pending')`
+  ).run(check.appRow.id, req.user.id, check.appRow.price_cents);
+  res.json({
+    ok: true, order_id: Number(info.lastInsertRowid), status: 'pending',
+    cashtag: CASHAPP_CASHTAG, amount_cents: check.appRow.price_cents,
+    amount: money.formatUsd(check.appRow.price_cents),
+  });
+});
+
+// Buyer claims they paid: records their $cashtag as proof.
+app.post('/api/purchase/cashapp/claim', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
+  const orderId = toId((req.body || {}).order_id);
+  const cashtag = String((req.body || {}).buyer_cashtag || '').trim();
+  if (!CASHTAG_RE.test(cashtag)) {
+    return res.status(400).json({ error: 'Enter your Cash App $cashtag (starts with $, letters/numbers only).' });
+  }
+  const order = db.prepare('SELECT * FROM cashapp_orders WHERE id = ? AND buyer_id = ?').get(orderId, req.user.id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status !== 'pending') return res.status(409).json({ error: `Order is already ${order.status}.` });
+  db.prepare(`UPDATE cashapp_orders SET buyer_cashtag = ?, status = 'claimed' WHERE id = ?`).run(cashtag, order.id);
+  res.json({ ok: true, order_id: order.id, status: 'claimed' });
+});
+
+// Buyer's own order status (for the "waiting for approval" screen).
+app.get('/api/purchase/cashapp/status', requireAuth, (req, res) => {
+  const orderId = toId(req.query.order_id);
+  const order = db.prepare('SELECT * FROM cashapp_orders WHERE id = ? AND buyer_id = ?').get(orderId, req.user.id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const owned = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(order.app_id, req.user.id);
+  res.json({ ok: true, status: order.status, owned: Boolean(owned), app_id: order.app_id });
+});
+
+// Owner: list Cash App orders awaiting review.
+app.get('/api/owner/cashapp/orders', requireRole('owner'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT o.*, a.name AS app_name, u.username AS buyer_name
+     FROM cashapp_orders o
+     JOIN apps a ON a.id = o.app_id
+     JOIN users u ON u.id = o.buyer_id
+     ORDER BY o.created_at DESC LIMIT 100`
+  ).all();
+  res.json({ ok: true, orders: rows, cashtag: CASHAPP_CASHTAG });
+});
+
+// Owner: approve a claimed order — writes the ledger + purchase (90/10 split).
+app.post('/api/owner/cashapp/orders/:id/approve', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM cashapp_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved.' });
+  if (order.status !== 'claimed') {
+    return res.status(409).json({ error: 'Buyer has not claimed payment yet.' });
+  }
+  const appRow = q.appById.get(order.app_id);
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const { developer, platform } = money.split(order.amount_cents);
+  const note = `Cash App manual — buyer ${order.buyer_cashtag} → ${CASHAPP_CASHTAG}`;
+  const ledgerId = txn(db, () => {
+    const li = db.prepare(
+      `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+       VALUES ('purchase',?,?,?,?,?,?,?)`
+    ).run(order.app_id, order.buyer_id, appRow.developer_id, order.amount_cents, platform, developer, note);
+    db.prepare('INSERT OR IGNORE INTO purchases (app_id, buyer_id, ledger_id) VALUES (?,?,?)')
+      .run(order.app_id, order.buyer_id, li.lastInsertRowid);
+    db.prepare(`UPDATE cashapp_orders SET status = 'approved', ledger_id = ? WHERE id = ?`)
+      .run(li.lastInsertRowid, order.id);
+    return li.lastInsertRowid;
+  });
+  res.json({ ok: true, order_id: order.id, ledger_id: Number(ledgerId) });
+});
+
+// Owner: reject a Cash App order.
+app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM cashapp_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
+  db.prepare(`UPDATE cashapp_orders SET status = 'rejected' WHERE id = ?`).run(id);
+  res.json({ ok: true, order_id: id, status: 'rejected' });
+});
+
+// Owner: set an app's price (cents). Lets the owner price apps from the dashboard.
+app.post('/api/owner/apps/:id/price', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const cents = Number((req.body || {}).price_cents);
+  if (!Number.isInteger(cents) || cents < 0 || cents > 1000000) {
+    return res.status(400).json({ error: 'price_cents must be 0–1000000.' });
+  }
+  const appRow = q.appById.get(id);
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  db.prepare('UPDATE apps SET price_cents = ? WHERE id = ?').run(cents, id);
+  res.json({ ok: true, app_id: id, price_cents: cents, price: money.formatUsd(cents) });
+});
+
+// Owner: list all apps (for the prices panel).
+app.get('/api/owner/apps', requireRole('owner'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT id, name, version, price_cents, status, download_count FROM apps ORDER BY id`
+  ).all();
+  res.json({ ok: true, apps: rows });
 });
 
 // Refunds: owner or the app's developer. Writes a negative ledger row so the

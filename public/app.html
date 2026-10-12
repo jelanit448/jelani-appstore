@@ -36,10 +36,12 @@ async function load() {
         ? `<button class="btn" id="dl">⬇ Download free</button>`
         : (a.owned
           ? `<button class="btn" id="dl">⬇ Download (purchased)</button>`
-          : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>`)}
+          : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>
+             <button class="btn" id="cashapp" style="background:#00d632">Pay with Cash App</button>`)}
       <span class="muted">${a.download_count} downloads</span>
     </div>
     <div id="payinfo" class="muted" style="margin-top:8px"></div>
+    <div id="cainfo" style="margin-top:8px"></div>
     </div>`;
   const dl = document.getElementById('dl');
   if (dl) dl.onclick = () => { location.href = '/api/apps/' + id + '/download'; setTimeout(load, 1500); };
@@ -70,6 +72,41 @@ async function load() {
     document.getElementById('payinfo').innerHTML =
       '<div class="muted">Checkout was cancelled — no charge was made.</div>';
   }
+  // ---- Manual Cash App payment (no card, no ID needed) ----
+  const caBtn = document.getElementById('cashapp');
+  if (caBtn) caBtn.onclick = async () => {
+    const box = document.getElementById('cainfo');
+    box.innerHTML = '<span class="muted">Setting up Cash App payment…</span>';
+    try {
+      const init = await api('/api/purchase/cashapp/init', { method: 'POST', body: { app_id: Number(id) } });
+      if (init.status === 'approved' || init.owned) { load(); return; }
+      box.innerHTML = `
+        <div class="card" style="margin-top:8px">
+          <b>Pay ${esc(init.amount)} with Cash App</b>
+          <p class="muted">1. Open Cash App on your phone and send <b>${esc(init.amount)}</b> to <b>${esc(init.cashtag)}</b><br>
+          2. Enter <b>your</b> $cashtag below so we can match your payment.</p>
+          <input class="f" id="ca_tag" placeholder="$yourcashtag" maxlength="21" style="max-width:240px">
+          <button class="btn" id="ca_claim" style="background:#00d632">I've sent the payment</button>
+          <div class="muted" id="ca_msg" style="margin-top:6px"></div>
+        </div>`;
+      document.getElementById('ca_claim').onclick = async () => {
+        const msg = document.getElementById('ca_msg');
+        const tag = document.getElementById('ca_tag').value.trim();
+        msg.textContent = 'Submitting…';
+        try {
+          await api('/api/purchase/cashapp/claim', { method: 'POST', body: { order_id: init.order_id, buyer_cashtag: tag } });
+          msg.innerHTML = '<span class="okmsg">✅ Payment claimed! The owner will verify it and unlock your download — usually within a day.</span>';
+          const poll = setInterval(async () => {
+            try {
+              const s = await api('/api/purchase/cashapp/status?order_id=' + init.order_id);
+              if (s.status === 'approved' || s.owned) { clearInterval(poll); load(); }
+              else if (s.status === 'rejected') { clearInterval(poll); msg.innerHTML = '<span class="errmsg">This order was not approved. Make sure you sent the payment to the right $cashtag.</span>'; }
+            } catch (e) { /* keep polling */ }
+          }, 10000);
+        } catch (e) { msg.innerHTML = ''; showErr(msg, e.message); }
+      };
+    } catch (e) { box.innerHTML = ''; showErr(document.getElementById('msg'), e.message); }
+  };
   document.getElementById('reviews').innerHTML = d.reviews.length
     ? d.reviews.map(r => `<p><b>${esc(r.username)}</b> <span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span><br>${esc(r.text)}<br><span class="muted">${esc(r.created_at)}</span></p>`).join('')
     : '<p class="muted">No reviews yet — be the first.</p>';

@@ -10,6 +10,8 @@
 <main>
   <div id="demo"></div><div id="msg"></div>
   <div class="panel"><h2>Moderation queue</h2><div id="queue"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>Cash App orders</h2><div id="cashapp"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>App prices</h2><div id="prices"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>Finance — every cent reconciled</h2><div id="fin"><p class="muted">Loading…</p></div></div>
 </main>
 <footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
@@ -49,7 +51,41 @@ async function loadFin() {
       <p class="muted">Stripe connected: ${f.stripeConfigured ? 'yes' : 'no — demo mode'}. ${esc(f.demoBanner)}</p>`;
   } catch (e) { document.getElementById('fin').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
-(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadFin(); })();
+async function loadCashapp() {
+  try {
+    const d = await api('/api/owner/cashapp/orders');
+    const open = d.orders.filter(o => o.status === 'pending' || o.status === 'claimed');
+    document.getElementById('cashapp').innerHTML = `
+      <p class="muted">Your $cashtag: <b>${esc(d.cashtag)}</b> — check Cash App for the payment, then approve. Unverified accounts can receive up to $1,000/month.</p>
+      ${open.length ? `<table><tr><th>App</th><th>Buyer</th><th>Amount</th><th>Buyer's $cashtag</th><th>Status</th><th></th></tr>` +
+        open.map(o => `<tr><td>${esc(o.app_name)}</td><td>${esc(o.buyer_name)}</td><td>$${(o.amount_cents / 100).toFixed(2)}</td>
+        <td>${esc(o.buyer_cashtag || '—')}</td><td>${esc(o.status)}</td>
+        <td><button class="btn" onclick="caMod(${o.id},true)" ${o.status !== 'claimed' ? 'disabled' : ''}>Approve</button>
+        <button class="btn danger" onclick="caMod(${o.id},false)">Reject</button></td></tr>`).join('') + `</table>`
+        : '<p class="muted">No open Cash App orders. 🎉</p>'}`;
+  } catch (e) { document.getElementById('cashapp').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function caMod(id, approve) {
+  await api(`/api/owner/cashapp/orders/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
+  loadCashapp(); loadFin();
+}
+async function loadPrices() {
+  try {
+    const d = await api('/api/owner/apps');
+    document.getElementById('prices').innerHTML = `<table><tr><th>App</th><th>Status</th><th>Price</th><th></th></tr>` +
+      d.apps.map(a => `<tr><td>${esc(a.name)} v${esc(a.version)}</td><td>${esc(a.status)}</td>
+      <td><input class="f" id="price_${a.id}" value="${(a.price_cents / 100).toFixed(2)}" style="max-width:90px"> </td>
+      <td><button class="btn" onclick="setPrice(${a.id})">Save</button></td></tr>`).join('') + `</table>
+      <p class="muted">Set 0.00 for free. Paid apps can be bought with Stripe (when connected) or Cash App.</p>`;
+  } catch (e) { document.getElementById('prices').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function setPrice(id) {
+  const v = parseFloat(document.getElementById('price_' + id).value || '0');
+  const r = await api(`/api/owner/apps/${id}/price`, { method: 'POST', body: { price_cents: Math.round(v * 100) } });
+  alert(`Price set to ${r.price}`);
+  loadPrices();
+}
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadCashapp(); await loadPrices(); await loadFin(); })();
 </script>
 </body>
 </html>
