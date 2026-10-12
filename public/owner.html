@@ -12,6 +12,12 @@
   <div class="panel"><h2>Moderation queue</h2><div id="queue"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>Cash App orders</h2><div id="cashapp"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>App prices</h2><div id="prices"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>App icon</h2>
+    <p class="muted">Upload a picture for a listing (PNG/JPG/WebP, under 5 MB). Shows on the store instead of the letter icon.</p>
+    <div class="row"><input class="f" id="icon_app" type="number" value="1" style="max-width:70px" title="App ID">
+    <input type="file" id="icon_file" accept="image/*">
+    <button class="btn" onclick="setIcon()">Upload icon</button></div>
+    <div id="icon_msg" class="muted"></div></div>
   <div class="panel"><h2>Finance — every cent reconciled</h2><div id="fin"><p class="muted">Loading…</p></div></div>
 </main>
 <footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
@@ -78,6 +84,26 @@ async function loadPrices() {
       <td><button class="btn" onclick="setPrice(${a.id})">Save</button></td></tr>`).join('') + `</table>
       <p class="muted">Set 0.00 for free. Paid apps can be bought with Stripe (when connected) or Cash App.</p>`;
   } catch (e) { document.getElementById('prices').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function setIcon() {
+  const msg = document.getElementById('icon_msg');
+  try {
+    const id = parseInt(document.getElementById('icon_app').value, 10);
+    const file = document.getElementById('icon_file').files[0];
+    if (!id || !file) throw new Error('Pick an app ID and an image file.');
+    if (file.size > 5 * 1048576) throw new Error('Image must be under 5 MB.');
+    msg.textContent = 'Uploading…';
+    const init = await api('/api/upload/init', { method: 'POST', body: { filename: file.name, size_bytes: file.size, kind: 'icon' } });
+    const CH = 1024 * 1024, total = Math.ceil(file.size / CH);
+    for (let i = 0; i < total; i++) {
+      const slice = file.slice(i * CH, (i + 1) * CH);
+      const r = await fetch(`/api/upload/chunk?upload_id=${init.upload_id}&index=${i}`, { method: 'POST', body: slice });
+      if (!r.ok) throw new Error('Chunk upload failed.');
+    }
+    const r = await api(`/api/owner/apps/${id}/icon`, { method: 'POST', body: { upload_id: init.upload_id } });
+    msg.textContent = 'Icon updated ✔';
+    alert('Icon set for app ' + id);
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
 }
 async function setPrice(id) {
   const v = parseFloat(document.getElementById('price_' + id).value || '0');

@@ -313,12 +313,16 @@ app.get('/api/apps/:id', (req, res) => {
   });
 });
 
-// Deterministic letter-icon so listings look alive without uploads.
+// Serves the uploaded icon when one exists, else falls back to the
+// deterministic letter-icon so listings look alive without uploads.
 app.get('/api/apps/:id/icon', (req, res) => {
   const id = toId(req.params.id);
   if (!id) return res.status(404).send('not found');
-  const appRow = db.prepare('SELECT name FROM apps WHERE id = ?').get(id);
+  const appRow = db.prepare('SELECT name, icon_path FROM apps WHERE id = ?').get(id);
   if (!appRow) return res.status(404).send('not found');
+  if (appRow.icon_path && fs.existsSync(appRow.icon_path)) {
+    return res.sendFile(path.resolve(appRow.icon_path));
+  }
   let h = 0;
   for (const c of appRow.name) h = (h * 31 + c.charCodeAt(0)) % 360;
   const letter = (appRow.name[0] || '?').toUpperCase();
@@ -327,6 +331,32 @@ app.get('/api/apps/:id/icon', (req, res) => {
     `<rect width="128" height="128" rx="24" fill="hsl(${h},65%,42%)"/>` +
     `<text x="64" y="86" font-family="sans-serif" font-size="64" fill="white" text-anchor="middle">${letter}</text></svg>`;
   res.type('image/svg+xml').send(svg);
+});
+
+// Owner-only: set the listing icon from a completed chunked upload
+// (kind 'icon'). Replaces any previous icon file.
+app.post('/api/owner/apps/:id/icon', requireRole('owner'), (req, res) => {
+  const { upload_id } = req.body || {};
+  const meta = readMeta(upload_id);
+  if (!meta || meta.user_id !== req.user.id || meta.kind !== 'icon') {
+    return res.status(404).json({ error: 'Icon upload not found.' });
+  }
+  if (meta.received_bytes !== meta.size_bytes) {
+    return res.status(400).json({ error: `Incomplete upload: ${meta.received_bytes}/${meta.size_bytes} bytes.` });
+  }
+  const id = toId(req.params.id);
+  const appRow = id ? q.appById.get(id) : null;
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const finalName = `icon-${appRow.id}-${Date.now()}${path.extname(meta.filename) || '.png'}`;
+  const finalPath = path.join(UPLOAD_DIR, finalName);
+  fs.renameSync(uploadPart(upload_id), finalPath);
+  fs.unlinkSync(uploadMeta(upload_id));
+  const oldIcon = appRow.icon_path;
+  db.prepare('UPDATE apps SET icon_path = ? WHERE id = ?').run(finalPath, appRow.id);
+  if (oldIcon && oldIcon !== finalPath) {
+    try { if (fs.existsSync(oldIcon)) fs.unlinkSync(oldIcon); } catch { /* best effort */ }
+  }
+  res.json({ ok: true, app_id: appRow.id, icon: `/api/apps/${appRow.id}/icon` });
 });
 
 app.get('/api/screenshots/:id', (req, res) => {
@@ -473,8 +503,8 @@ app.post('/api/upload/init', requireAuth, (req, res) => {
   if (!filename || !Number.isInteger(size) || size <= 0 || size > MAX_FILE_BYTES) {
     return res.status(400).json({ error: `size_bytes must be 1–${MAX_FILE_BYTES}.` });
   }
-  if (!['appfile', 'screenshot'].includes(kind)) {
-    return res.status(400).json({ error: "kind must be 'appfile' or 'screenshot'." });
+  if (!['appfile', 'screenshot', 'icon'].includes(kind)) {
+    return res.status(400).json({ error: "kind must be 'appfile', 'screenshot', or 'icon'." });
   }
   const id = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(uploadPart(id), Buffer.alloc(0));
