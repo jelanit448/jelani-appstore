@@ -1,9 +1,9 @@
-# node:24-slim (Debian/glibc) — NOT alpine. (Alpine's musl is fine for the
-# store itself, but AppMaker's Android build-tools are glibc binaries.)
-# NOTE: SDK/JDK are NOT baked into the image (that broke Render's health
-# check). AppMaker downloads them at runtime to the persistent volume on
-# first use — see lib/appmaker.js ensureSdk().
-FROM node:24-slim
+# Back to Alpine — the last base that deployed cleanly on Render (Debian
+# slim deploys all failed Render's health check with the app verifiably
+# listening; root cause unresolved, Alpine is the known-good baseline).
+# AppMaker's JDK/SDK are NOT baked in; they're provisioned at runtime to
+# the persistent volume on first use — see lib/appmaker.js ensureSdk().
+FROM node:24-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
