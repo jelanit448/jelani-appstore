@@ -5,6 +5,10 @@
 # the persistent volume on first use — see lib/appmaker.js ensureSdk().
 FROM node:24-alpine
 WORKDIR /app
+# AppMaker runtime needs: curl/unzip/zip for SDK provisioning + the build,
+# bash for sdkmanager, gcompat + libstdc++ so the glibc Android build-tools
+# (aapt2, zipalign) run under Alpine's musl.
+RUN apk add --no-cache curl unzip zip bash gcompat libstdc++
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY . .
