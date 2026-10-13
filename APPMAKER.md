@@ -56,3 +56,27 @@ framework code to include.
    once), done.
 
 Your builds are saved under **My builds** so you can re-download them anytime.
+
+## Publishing to the store & getting paid
+
+Built something good? Hit **💰 Publish to store** on any build:
+
+1. Set a price (USD), add a description, pick a category, and check the
+   copyright attestation (required — you must own what you publish).
+2. Your app goes into the **moderation queue** (`pending`) like every other
+   upload. The store owner reviews it; once **approved**, it's live in the
+   store for everyone.
+
+**You get paid on every sale — 90%.** Published apps use the exact same
+purchase flows as the rest of the store, nothing separate:
+
+- **Cash App:** a buyer pays the store's $cashtag, claims with their own
+  $cashtag, the owner approves, the download unlocks.
+- **Stripe:** card checkout when the store's Stripe is in live mode.
+
+Either way the sale writes one ledger row with the single 90/10 split
+(`lib/money.js`): **90% to you (the builder), 10% to the platform.** The
+publish form shows your per-sale earnings live as you set the price
+(e.g. $1.99 → you earn $1.79). Payouts to developers go through the same
+KYC/payout flow as every other developer on the store — no special cases,
+no second money definition.

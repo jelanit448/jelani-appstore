@@ -128,7 +128,8 @@ document.getElementById('build').onclick = async () => {
     const kb = (r.apk_size / 1024).toFixed(1);
     result.innerHTML = `<div class="okmsg"><b>✓ Built!</b> ${esc(r.app_name)} v${r.version_code} — ${kb} KB, debug-signed, ready to install.` +
       (r.warnings.length ? `<br><span class="muted">⚠ ${esc(r.warnings.join(' '))}</span>` : '') +
-      `</div><p><a class="btn" style="text-decoration:none" href="${esc(r.download_url)}">⬇ Download APK</a></p>` +
+      `</div><p><a class="btn" style="text-decoration:none" href="${esc(r.download_url)}">⬇ Download APK</a> ` +
+      `<button class="btn ghost" onclick="document.getElementById('myBuilds').scrollIntoView();showPublish(${r.build_id})">💰 Publish to store</button></p>` +
       `<p class="muted">Debug-signed for testing — needs a release key before any Play Store release. See BUILD_NOTES in your download for the full honesty list.</p>`;
     loadBuilds();
   } catch (e) {
@@ -139,15 +140,69 @@ document.getElementById('build').onclick = async () => {
   }
 };
 
+let BUILDS = [];
 async function loadBuilds() {
   try {
     const d = await api('/api/appmaker/builds');
+    BUILDS = d.builds;
     document.getElementById('buildList').innerHTML = d.builds.length ? d.builds.map(b => `
       <div class="panel" style="margin:10px 0"><b>${esc(b.app_name)}</b> <span class="muted">${esc(b.package_name)} · v${b.version_code} · ${esc(b.template)} · ${(b.apk_size/1024).toFixed(1)} KB · ${esc(b.created_at.slice(0,10))}</span>
       ${b.warnings.length ? `<br><span class="muted">⚠ ${esc(b.warnings.join(' '))}</span>` : ''}
-      <br><a class="btn" style="text-decoration:none;margin-top:8px" href="${esc(b.download_url)}">⬇ Download</a></div>`).join('')
+      <br><a class="btn" style="text-decoration:none;margin-top:8px" href="${esc(b.download_url)}">⬇ Download</a>
+      <button class="btn ghost" style="margin-top:8px" onclick="showPublish(${b.id})">💰 Publish to store</button>
+      <div id="pub_${b.id}"></div></div>`).join('')
       : '<p class="muted">No builds yet — make your first app above.</p>';
   } catch (e) { document.getElementById('buildList').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// Publishing: creates a real store listing owned by the builder. It goes to
+// the owner for approval like any upload, and sales pay the builder 90%
+// via the normal purchase flows (Cash App / Stripe) — no separate system.
+function earnEstimate(cents) {
+  const platform = Math.round(cents * 1000 / 10000); // 10% — mirrors lib/money.js
+  const dev = cents - platform;
+  return '$' + (dev / 100).toFixed(2);
+}
+function showPublish(buildId) {
+  const box = document.getElementById('pub_' + buildId);
+  const b = (BUILDS || []).find(x => x.id === buildId);
+  const appName = b ? b.app_name : 'this app';
+  box.innerHTML = `
+    <div class="panel" style="margin:10px 0;background:var(--bg)">
+      <b>Publish "${esc(appName)}" to the store</b>
+      <p class="muted">It goes to the owner for review first, then goes live. You earn <b>90% of every sale</b> — the store keeps 10%.</p>
+      <div id="pubmsg_${buildId}"></div>
+      <label class="f">Price (USD)</label>
+      <input class="f" id="pubprice_${buildId}" type="number" min="0" step="0.01" value="1.99" style="max-width:140px">
+      <div class="muted" id="pubearn_${buildId}" style="margin:4px 0"></div>
+      <label class="f">Description</label>
+      <textarea class="f" id="pubdesc_${buildId}" placeholder="What does your app do?"></textarea>
+      <div class="row"><div style="flex:1"><label class="f">Category</label><input class="f" id="pubcat_${buildId}" value="Tools"></div></div>
+      <div class="checkline"><input type="checkbox" id="pubattest_${buildId}">
+        <label for="pubattest_${buildId}"><b>Copyright attestation (required):</b> I made this app with App Maker and own the rights to everything in it.</label></div>
+      <button class="btn" onclick="doPublish(${buildId})">Submit for review</button>
+    </div>`;
+  const upd = () => {
+    const cents = Math.round(parseFloat(document.getElementById('pubprice_' + buildId).value || '0') * 100);
+    document.getElementById('pubearn_' + buildId).innerHTML =
+      cents > 0 ? `💵 You earn <b>${earnEstimate(cents)}</b> per sale (90%).` : 'Free app — no earnings, but no charge to buyers either.';
+  };
+  document.getElementById('pubprice_' + buildId).addEventListener('input', upd);
+  upd();
+}
+async function doPublish(buildId) {
+  const msg = document.getElementById('pubmsg_' + buildId);
+  try {
+    const price_cents = Math.round(parseFloat(document.getElementById('pubprice_' + buildId).value || '0') * 100);
+    if (!document.getElementById('pubattest_' + buildId).checked) throw new Error('Copyright attestation is required.');
+    const r = await api(`/api/appmaker/builds/${buildId}/publish`, { method: 'POST', body: {
+      price_cents,
+      description: document.getElementById('pubdesc_' + buildId).value,
+      category: document.getElementById('pubcat_' + buildId).value,
+      copyright_attested: true,
+    }});
+    msg.innerHTML = `<div class="okmsg"><b>✓ ${esc(r.message)}</b><br>Price: ${esc(r.price)} — you earn <b>${esc(r.you_earn_per_sale)}</b> per sale.</div>`;
+  } catch (e) { msg.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 init();

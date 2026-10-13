@@ -1164,6 +1164,59 @@ app.get('/api/appmaker/builds/:id/download', requireDevOrOwner, (req, res) => {
   res.download(row.apk_path, `${row.package_name}-v${row.version_code}.apk`);
 });
 
+// Publish a build as a real store listing. The listing goes through the
+// SAME moderation queue and the SAME purchase flows as any upload:
+// status starts 'pending', the owner approves, and buyers pay via Cash App
+// or Stripe — the 90/10 split in lib/money.js pays the builder (developer_id)
+// 90% automatically. No new payment path, no new money definition.
+app.post('/api/appmaker/builds/:id/publish', requireDevOrOwner, (req, res) => {
+  const id = toId(req.params.id);
+  const build = id ? db.prepare('SELECT * FROM appmaker_builds WHERE id = ?').get(id) : null;
+  if (!build) return res.status(404).json({ error: 'Build not found.' });
+  if (build.user_id !== req.user.id && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Not your build.' });
+  }
+  const { price_cents, description, category, copyright_attested } = req.body || {};
+  // Copyright attestation is REQUIRED — same rule as the upload flow
+  // (PROBLEMS_FIXED.md #6: the old empty Copyright Vault).
+  if (copyright_attested !== true) {
+    return res.status(400).json({ error: 'Copyright attestation required: confirm you own the rights to this app.' });
+  }
+  const price = Number(price_cents || 0);
+  if (!Number.isInteger(price) || price < 0) {
+    return res.status(400).json({ error: 'price_cents must be a non-negative integer.' });
+  }
+  if (!fs.existsSync(build.apk_path)) {
+    return res.status(410).json({ error: 'APK file missing — rebuild it first.' });
+  }
+  const desc = String(description || '').slice(0, 8000);
+  const cat = String(category || 'Tools').slice(0, 60);
+
+  // Copy (not move): the build stays downloadable under My builds.
+  const finalName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${build.package_name}-v${build.version_code}.apk`;
+  const finalPath = path.join(UPLOAD_DIR, finalName);
+  fs.copyFileSync(build.apk_path, finalPath);
+
+  const info = db.prepare(
+    `INSERT INTO apps (name, developer_id, description, category, version, price_cents,
+      file_path, file_size, status, copyright_attested)
+     VALUES (?,?,?,?,?,?,?,?,'pending',1)`
+  ).run(
+    build.app_name, build.user_id, desc, cat, build.version_name,
+    price, finalPath, build.apk_size
+  );
+  const appId = Number(info.lastInsertRowid);
+  const { developer } = money.split(price);
+  res.json({
+    ok: true,
+    app_id: appId,
+    status: 'pending',
+    message: 'Submitted for owner review. It goes live after approval.',
+    price: money.formatUsd(price),
+    you_earn_per_sale: money.formatUsd(developer),
+  });
+});
+
 // ---------------------------------------------------------------------------
 // frontend
 // ---------------------------------------------------------------------------app.use(express.static(path.join(ROOT, 'public')));
