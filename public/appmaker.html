@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>App Maker — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="gate"></div>
+  <div class="panel" id="builder" style="display:none">
+    <h2>🔨 App Maker</h2>
+    <p class="muted">Fill the form, get a real installable Android app (.apk). Built on the proven no-crash recipe: pure native WebView, no Capacitor, no frameworks. Every build is JS-audited so the old search-bar crash class can't ship.</p>
+    <div id="msg"></div>
+    <label class="f">App name</label>
+    <input class="f" id="appName" maxlength="50" placeholder="My Cool App">
+    <label class="f">Package name <span class="muted">(lowercase, like com.yourname.myapp)</span></label>
+    <input class="f" id="pkg" placeholder="com.yourname.myapp">
+    <div class="muted" id="pkgHint"></div>
+    <label class="f">Template</label>
+    <div class="row">
+      <label class="checkline"><input type="radio" name="tpl" value="starter" checked> <b>Starter</b> — clean app with your name, a welcome screen, and a tap counter</label>
+    </div>
+    <div class="row">
+      <label class="checkline"><input type="radio" name="tpl" value="website"> <b>Website wrapper</b> — your website as an app (needs https)</label>
+    </div>
+    <div id="urlRow" style="display:none">
+      <label class="f">Website URL</label>
+      <input class="f" id="siteUrl" placeholder="https://example.com">
+    </div>
+    <div class="row">
+      <div style="flex:1"><label class="f">Theme color</label><input class="f" id="color" type="color" value="#0f9d58" style="height:44px"></div>
+      <div style="flex:2"><label class="f">Icon <span class="muted">(PNG, optional)</span></label><input class="f" id="icon" type="file" accept="image/png"></div>
+    </div>
+    <div class="progress" id="progWrap" style="display:none"><div id="bar"></div></div>
+    <div class="muted" id="pstat"></div>
+    <button class="btn" id="build" style="margin-top:10px">Build my app</button>
+    <div id="result"></div>
+  </div>
+  <div class="panel" id="myBuilds" style="display:none">
+    <h2>My builds</h2>
+    <div id="buildList"><p class="muted">Loading…</p></div>
+  </div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
+function tpl() { return document.querySelector('input[name="tpl"]:checked').value; }
+
+async function init() {
+  await renderHeader();
+  let u = null;
+  try { u = await me(); } catch (e) { /* not logged in */ }
+  if (!u) {
+    document.getElementById('gate').innerHTML =
+      '<div class="panel"><h2>Sign in required</h2><p><a class="btn" href="/login.html" style="text-decoration:none">Sign in</a></p><p class="muted">Developers and the store owner can use App Maker. New here? <a href="/signup.html">Create an account</a>, then become a developer from your dashboard.</p></div>';
+    return;
+  }
+  if (!['owner', 'developer'].includes(u.role)) {
+    document.getElementById('gate').innerHTML =
+      '<div class="panel"><h2>Developer access needed</h2><p class="muted">App Maker is for developers. <a href="/dashboard.html">Become a developer</a> first — it\'s free.</p></div>';
+    return;
+  }
+  document.getElementById('builder').style.display = '';
+  document.getElementById('myBuilds').style.display = '';
+  loadBuilds();
+}
+
+document.querySelectorAll('input[name="tpl"]').forEach(r => r.addEventListener('change', () => {
+  document.getElementById('urlRow').style.display = tpl() === 'website' ? '' : 'none';
+}));
+document.getElementById('pkg').addEventListener('input', (e) => {
+  const v = e.target.value.trim();
+  const ok = PKG_RE.test(v);
+  document.getElementById('pkgHint').innerHTML = v
+    ? (ok ? '<span style="color:var(--green-dark)">✓ looks good</span>' : '<span style="color:var(--red)">✗ use lowercase like com.yourname.myapp (letters, digits, _; at least one dot)</span>')
+    : '';
+});
+
+const CHUNK = 5 * 1024 * 1024;
+async function uploadIcon(file) {
+  const initRes = await fetch('/api/upload/init', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, size_bytes: file.size, kind: 'icon' }) });
+  const init = await initRes.json();
+  if (!initRes.ok) throw new Error(init.error || 'icon upload init failed');
+  const total = Math.ceil(file.size / CHUNK);
+  for (let i = 0; i < total; i++) {
+    const r = await fetch(`/api/upload/chunk?upload_id=${init.upload_id}&index=${i}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+      body: file.slice(i * CHUNK, (i + 1) * CHUNK) });
+    if (!r.ok) throw new Error('icon chunk failed');
+  }
+  return init.upload_id;
+}
+
+document.getElementById('build').onclick = async () => {
+  const msg = document.getElementById('msg');
+  const result = document.getElementById('result');
+  const bar = document.getElementById('bar');
+  const pstat = document.getElementById('pstat');
+  msg.innerHTML = ''; result.innerHTML = '';
+  try {
+    const appName = document.getElementById('appName').value.trim();
+    const packageName = document.getElementById('pkg').value.trim();
+    if (appName.length < 2) throw new Error('Give your app a name (2+ characters).');
+    if (!PKG_RE.test(packageName)) throw new Error('Bad package name — use lowercase like com.yourname.myapp.');
+    const template = tpl();
+    const url = document.getElementById('siteUrl').value.trim();
+    if (template === 'website' && !/^https:\/\//.test(url)) throw new Error('Website template needs an https:// URL.');
+    const color = document.getElementById('color').value;
+    const iconFile = document.getElementById('icon').files[0];
+    if (iconFile && iconFile.type !== 'image/png') throw new Error('Icon must be a PNG file.');
+
+    document.getElementById('build').disabled = true;
+    document.getElementById('progWrap').style.display = '';
+    bar.style.width = '15%'; pstat.textContent = 'Uploading icon…';
+    let icon_upload_id = null;
+    if (iconFile) icon_upload_id = await uploadIcon(iconFile);
+
+    bar.style.width = '40%'; pstat.textContent = 'Building your APK — this takes about 10 seconds…';
+    const r = await api('/api/appmaker/build', { method: 'POST',
+      body: { appName, packageName, template, url, color, icon_upload_id } });
+
+    bar.style.width = '100%'; pstat.textContent = '';
+    const kb = (r.apk_size / 1024).toFixed(1);
+    result.innerHTML = `<div class="okmsg"><b>✓ Built!</b> ${esc(r.app_name)} v${r.version_code} — ${kb} KB, debug-signed, ready to install.` +
+      (r.warnings.length ? `<br><span class="muted">⚠ ${esc(r.warnings.join(' '))}</span>` : '') +
+      `</div><p><a class="btn" style="text-decoration:none" href="${esc(r.download_url)}">⬇ Download APK</a></p>` +
+      `<p class="muted">Debug-signed for testing — needs a release key before any Play Store release. See BUILD_NOTES in your download for the full honesty list.</p>`;
+    loadBuilds();
+  } catch (e) {
+    msg.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  } finally {
+    document.getElementById('build').disabled = false;
+    document.getElementById('progWrap').style.display = 'none';
+  }
+};
+
+async function loadBuilds() {
+  try {
+    const d = await api('/api/appmaker/builds');
+    document.getElementById('buildList').innerHTML = d.builds.length ? d.builds.map(b => `
+      <div class="panel" style="margin:10px 0"><b>${esc(b.app_name)}</b> <span class="muted">${esc(b.package_name)} · v${b.version_code} · ${esc(b.template)} · ${(b.apk_size/1024).toFixed(1)} KB · ${esc(b.created_at.slice(0,10))}</span>
+      ${b.warnings.length ? `<br><span class="muted">⚠ ${esc(b.warnings.join(' '))}</span>` : ''}
+      <br><a class="btn" style="text-decoration:none;margin-top:8px" href="${esc(b.download_url)}">⬇ Download</a></div>`).join('')
+      : '<p class="muted">No builds yet — make your first app above.</p>';
+  } catch (e) { document.getElementById('buildList').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1036,9 +1036,137 @@ app.post('/api/kyc', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// frontend
+// AppMaker — generate installable APKs from templates
 // ---------------------------------------------------------------------------
-app.use(express.static(path.join(ROOT, 'public')));
+const appmaker = require('./lib/appmaker');
+const APPMAKER_DIR = path.join(UPLOAD_DIR, 'appmaker');
+fs.mkdirSync(APPMAKER_DIR, { recursive: true });
+
+// Developers and the owner can build. (requireRole takes one role, so the
+// two-role check is inline — same server-side enforcement.)
+function requireDevOrOwner(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Sign in required.' });
+  if (!['owner', 'developer'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Requires developer or owner role.' });
+  }
+  next();
+}
+
+function nextVersionCode(packageName) {
+  const row = db.prepare(
+    'SELECT MAX(version_code) AS v FROM appmaker_builds WHERE package_name = ?'
+  ).get(packageName);
+  return (row && row.v ? row.v : 0) + 1;
+}
+
+// Builds are CPU-heavy (~10s): 10 per hour per account.
+app.post('/api/appmaker/build', requireDevOrOwner, rateLimit({ windowMs: 3600_000, max: 10, key: 'appmaker' }),
+  (req, res) => {
+    const t0 = Date.now();
+    try {
+      const { appName, packageName, template, url, color, icon_upload_id } = req.body || {};
+      const pkg = appmaker.validatePackageName(packageName);
+      const name = appmaker.validateAppName(appName);
+      const tpl = template === 'website' ? 'website' : 'starter';
+      if (tpl === 'website') appmaker.validateUrl(url);
+      const versionCode = nextVersionCode(pkg);
+
+      // Optional PNG icon via the chunked-upload flow (kind 'icon').
+      let iconSrcPath = null;
+      if (icon_upload_id) {
+        const meta = readMeta(icon_upload_id);
+        if (!meta || meta.user_id !== req.user.id || meta.kind !== 'icon' || meta.received_bytes !== meta.size_bytes) {
+          return res.status(400).json({ error: 'Icon upload not found or incomplete.' });
+        }
+        iconSrcPath = uploadPart(icon_upload_id);
+      }
+
+      const result = appmaker.generateApk({
+        appName: name,
+        packageName: pkg,
+        template: tpl,
+        url: tpl === 'website' ? url : undefined,
+        color,
+        iconSrcPath,
+        versionCode,
+        versionName: '1.0',
+        workRoot: path.join(TMP_DIR, 'appmaker'),
+        dataDir: path.join(ROOT, 'data'),
+      });
+
+      // Persist the APK + notes under the uploads dir (survives restarts).
+      // (copy+unlink, not rename: data/ and uploads/ can be different volumes.)
+      const moveFile = (src, dest) => {
+        fs.copyFileSync(src, dest);
+        fs.unlinkSync(src);
+      };
+      const destApk = path.join(APPMAKER_DIR, `${result.versionCode}-${crypto.randomBytes(6).toString('hex')}.apk`);
+      moveFile(result.apkPath, destApk);
+      let destNotes = null;
+      try {
+        destNotes = destApk + '.BUILD_NOTES.txt';
+        moveFile(result.notesPath, destNotes);
+      } catch { /* notes are best-effort */ }
+      if (icon_upload_id) { try { fs.unlinkSync(uploadMeta(icon_upload_id)); } catch { /* best effort */ } }
+      // Clean the temp project dir (APK + notes already moved out).
+      try { fs.rmSync(result.workDir, { recursive: true, force: true }); } catch { /* best effort */ }
+
+      const info = db.prepare(
+        `INSERT INTO appmaker_builds
+           (user_id, app_name, package_name, template, version_code, version_name, apk_path, apk_size, notes_path, warnings)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`
+      ).run(req.user.id, name, pkg, tpl, result.versionCode, '1.0',
+        destApk, result.size, destNotes, JSON.stringify(result.warnings));
+      res.json({
+        ok: true,
+        build_id: Number(info.lastInsertRowid),
+        app_name: name,
+        package_name: pkg,
+        version_code: result.versionCode,
+        apk_size: result.size,
+        warnings: result.warnings,
+        download_url: `/api/appmaker/builds/${info.lastInsertRowid}/download`,
+        took_ms: Date.now() - t0,
+      });
+    } catch (e) {
+      const msg = String(e.message || 'Build failed.');
+      // Known validation / environment problems get a 400 with the plain message;
+      // unexpected failures stay a 500 without leaking internals.
+      const known = /package name|app name|URL|Color|versionCode|JS audit|assets are|SDK|JDK|Icon/i.test(msg);
+      console.error('[appmaker] build failed:', msg.split('\n')[0]);
+      res.status(known ? 400 : 500).json({ error: known ? msg : 'Build failed. Try again or simplify the inputs.' });
+    }
+  });
+
+app.get('/api/appmaker/builds', requireDevOrOwner, (req, res) => {
+  const rows = db.prepare(
+    `SELECT id, app_name, package_name, template, version_code, version_name,
+            apk_size, warnings, created_at
+     FROM appmaker_builds WHERE user_id = ? ORDER BY id DESC LIMIT 100`
+  ).all(req.user.id);
+  res.json({
+    builds: rows.map((r) => ({
+      ...r,
+      warnings: JSON.parse(r.warnings || '[]'),
+      download_url: `/api/appmaker/builds/${r.id}/download`,
+    })),
+  });
+});
+
+app.get('/api/appmaker/builds/:id/download', requireDevOrOwner, (req, res) => {
+  const id = toId(req.params.id);
+  const row = id ? db.prepare('SELECT * FROM appmaker_builds WHERE id = ?').get(id) : null;
+  if (!row) return res.status(404).json({ error: 'Build not found.' });
+  if (row.user_id !== req.user.id && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Not your build.' });
+  }
+  if (!fs.existsSync(row.apk_path)) return res.status(410).json({ error: 'APK file missing — rebuild it.' });
+  res.download(row.apk_path, `${row.package_name}-v${row.version_code}.apk`);
+});
+
+// ---------------------------------------------------------------------------
+// frontend
+// ---------------------------------------------------------------------------app.use(express.static(path.join(ROOT, 'public')));
 
 // error handler
 // eslint-disable-next-line no-unused-vars

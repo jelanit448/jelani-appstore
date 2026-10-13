@@ -32,7 +32,7 @@ async function renderHeader(active) {
   const nav = document.getElementById('nav');
   let links = `<a href="/">Store</a>`;
   if (u) {
-    if (u.role === 'owner' || u.role === 'developer') links += `<a href="/upload.html">Upload app</a><a href="/dashboard.html">Dashboard</a>`;
+    if (u.role === 'owner' || u.role === 'developer') links += `<a href="/upload.html">Upload app</a><a href="/appmaker.html">App Maker</a><a href="/dashboard.html">Dashboard</a>`;
     else links += `<a href="/dashboard.html">Become a developer</a>`;
     if (u.role === 'owner') links += `<a href="/owner.html">Owner</a>`;
     links += `<a href="/kyc.html">Payouts</a>`;
