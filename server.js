@@ -1228,8 +1228,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error.' });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n  Jelani's App Store running at http://localhost:${PORT}`);
-  console.log(`  Owner login: jelani / ChangeMe123!  (change on first login; Terms gate applies)`);
+// Lightweight health probe for orchestrators (Render, Docker, etc.).
+app.get('/healthz', (req, res) => res.status(200).send('ok'));
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n  Jelani's App Store running at http://0.0.0.0:${PORT}`);
   console.log(`  ${money.DEMO_BANNER}\n`);
 });
