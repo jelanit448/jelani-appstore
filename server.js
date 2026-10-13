@@ -1219,7 +1219,10 @@ app.post('/api/appmaker/builds/:id/publish', requireDevOrOwner, (req, res) => {
 
 // ---------------------------------------------------------------------------
 // frontend
-// ---------------------------------------------------------------------------app.use(express.static(path.join(ROOT, 'public')));
+// ---------------------------------------------------------------------------
+// frontend (static files)
+// ---------------------------------------------------------------------------
+app.use(express.static(path.join(ROOT, 'public')));
 
 // error handler
 // eslint-disable-next-line no-unused-vars
