@@ -245,9 +245,10 @@ app.use(requireTermsFresh);
 // ---------------------------------------------------------------------------
 app.get('/api/config', (req, res) => {
   res.json({
-    demoMode: !stripe.configured,
+    demoMode: !stripe.live,
     demoBanner: money.DEMO_BANNER,
     stripeConfigured: stripe.configured,
+    stripeLive: stripe.live,
     termsVersion: TERMS_VERSION,
     platformFeeBps: money.PLATFORM_FEE_BPS,
     maxUploadBytes: MAX_FILE_BYTES,
@@ -653,12 +654,21 @@ app.post('/api/purchase', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }
   const already = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(appRow.id, req.user.id);
   if (already) return res.status(409).json({ error: 'Already purchased.' });
 
-  // Real money: demo purchases are OFF once Stripe is connected. The buyer
-  // must go through Stripe Checkout so a real charge exists behind the ledger.
-  if (stripe.configured) {
+  // Real money: demo purchases are OFF once Stripe is LIVE. The buyer must
+  // go through Stripe Checkout so a real charge exists behind the ledger.
+  if (stripe.live) {
     return res.status(402).json({
       error: 'Real payments are enabled — check out with Stripe to buy this app.',
       checkout: '/api/purchase/checkout',
+      app_id: appRow.id,
+    });
+  }
+  // A test key is configured but cards are NOT live: demo purchases stay OFF
+  // (they would give paid apps away free). Cash App is the real-money rail.
+  if (stripe.configured) {
+    return res.status(402).json({
+      error: 'Pay with Cash App to buy this app — card checkout is not live yet.',
+      cashapp: true,
       app_id: appRow.id,
     });
   }
@@ -693,10 +703,13 @@ app.post('/api/purchase', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }
 // The ledger row is written by the webhook on checkout.session.completed,
 // AFTER Stripe confirms the charge — never here.
 app.post('/api/purchase/checkout', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), async (req, res) => {
-  if (!stripe.configured) {
-    const err = new Error('Real payments are not connected yet — demo mode only.');
-    err.code = 'STRIPE_UNCONFIGURED';
-    return res.status(503).json({ error: err.message, code: err.code, fallback: '/api/purchase' });
+  if (!stripe.live) {
+    // Refuse test-mode checkout: Stripe test cards (4242…) would otherwise
+    // complete "purchases" and unlock paid apps for free. Cash App is the
+    // live rail until a real sk_live_ key + Connect/KYC are in place.
+    const err = new Error('Card payments are not live yet — pay with Cash App.');
+    err.code = 'STRIPE_NOT_LIVE';
+    return res.status(503).json({ error: err.message, code: err.code });
   }
   const appId = toId((req.body || {}).app_id);
   if (!appId) return res.status(404).json({ error: 'App not found.' });

@@ -59,7 +59,7 @@ function stars(avg, n) {
 }
 
 function demoBanner() {
-  return `<div class="demo-banner">⚠️ <b>Demo money mode.</b> Balances shown here are ledger records only — <b>not withdrawable</b> until Stripe Connect is configured and KYC is verified. <a href="/kyc.html">Payout settings</a></div>`;
+  return `<div class="demo-banner">💵 <b>Cash App sales are real money</b> — paid to $JelaniThompson2 and approved by the owner. Card payments (Stripe) are in test mode until the owner finishes Stripe verification, so card balances are ledger records only for now. <a href="/kyc.html">Payout settings</a></div>`;
 }
 
 function showErr(el, msg) { el.innerHTML = `<div class="err">${esc(msg)}</div>`; }

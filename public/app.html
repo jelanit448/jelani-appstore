@@ -57,6 +57,10 @@ async function load() {
         location.href = r.checkout_url;
         return;
       } catch (e2) {
+        if (/not live yet/i.test(e2.message)) {
+          info.innerHTML = '<div class="okmsg">💵 Card checkout isn\'t live yet — use the green <b>Pay with Cash App</b> button above. Real money, no card needed.</div>';
+          return;
+        }
         if (!/not connected yet|demo mode/i.test(e2.message)) throw e2;
       }
       const r = await api('/api/purchase', { method: 'POST', body: { app_id: Number(id) } });
