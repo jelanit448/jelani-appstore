@@ -866,6 +866,38 @@ app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res
   res.json({ ok: true, order_id: id, status: 'rejected' });
 });
 
+// Internal: read-only Cash App totals for the daily cap watcher. Gated by the
+// WATCH_TOKEN env var (compared via hashes so lengths never leak); when the
+// env var is unset the route 404s like it doesn't exist. Reports what buyers
+// actually paid: APPROVED Cash App orders only, dated by their ledger row.
+app.get('/api/internal/cashapp-summary', (req, res) => {
+  const expected = process.env.WATCH_TOKEN || '';
+  if (!expected) return res.status(404).json({ error: 'Not found.' });
+  const given = String(req.get('x-watch-token') || '');
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  if (!crypto.timingSafeEqual(a, b)) return res.status(404).json({ error: 'Not found.' });
+  const last30 = db.prepare(
+    `SELECT COALESCE(SUM(o.amount_cents), 0) AS total_cents, COUNT(*) AS n
+     FROM cashapp_orders o JOIN ledger l ON l.id = o.ledger_id
+     WHERE o.status = 'approved' AND l.created_at >= datetime('now', '-30 days')`
+  ).get();
+  const allTime = db.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS n
+     FROM cashapp_orders WHERE status = 'approved'`
+  ).get();
+  res.json({
+    ok: true,
+    cashtag: CASHAPP_CASHTAG,
+    cap_cents: 100000,
+    last_30d_cents: Number(last30.total_cents),
+    last_30d_count: Number(last30.n),
+    all_time_cents: Number(allTime.total_cents),
+    all_time_count: Number(allTime.n),
+    generated_at: new Date().toISOString(),
+  });
+});
+
 // Owner: set an app's price (cents). Lets the owner price apps from the dashboard.
 app.post('/api/owner/apps/:id/price', requireRole('owner'), (req, res) => {
   const id = toId(req.params.id);
