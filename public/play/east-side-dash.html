@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0c">
+<title>East Side Dash — Play Free | Jelani's App Store</title>
+<meta name="description" content="Play East Side Dash free in your browser — the East St. Louis endless runner by Jelani Thompson. Tap to jump, grab gold records, beat your best.">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a0c; color:#f5f0e1; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; align-items:center; }
+  header { width:100%; max-width:480px; padding:14px 16px 8px; display:flex; align-items:center; justify-content:space-between; }
+  header .brand { font-weight:800; letter-spacing:2px; color:#d4af37; font-size:15px; }
+  header a.back { color:#9a9a9a; text-decoration:none; font-size:13px; }
+  h1 { font-size:22px; letter-spacing:3px; color:#d4af37; margin:2px 0 2px; text-align:center; }
+  p.tag { color:#9a9a9a; font-size:13px; text-align:center; margin-bottom:10px; }
+  #stage { width:min(420px, 94vw); aspect-ratio:420/740; max-height:72vh; border:2px solid #d4af37;
+           border-radius:14px; overflow:hidden; background:#000; box-shadow:0 0 40px rgba(212,175,55,.25); }
+  #stage iframe { width:100%; height:100%; border:0; display:block; }
+  .cta { margin:14px 0 6px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:10px; font-weight:700; font-size:15px;
+         text-decoration:none; border:1px solid #d4af37; }
+  .btn.gold { background:#d4af37; color:#0a0a0c; }
+  .btn.ghost { background:transparent; color:#d4af37; }
+  p.fine { color:#777; font-size:12px; text-align:center; padding:0 20px 24px; max-width:480px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">★ JELANI'S APP STORE</span>
+  <a class="back" href="/app.html?id=4">← app page</a>
+</header>
+<h1>EAST SIDE DASH</h1>
+<p class="tag">East St. Louis endless runner — tap to jump, grab the gold records</p>
+<div id="stage">
+  <iframe src="./east-side-dash/index.html" title="Play East Side Dash" allow="autoplay"></iframe>
+</div>
+<div class="cta">
+  <a class="btn gold" href="/app.html?id=4">⬇ Get the full app — $1.99</a>
+  <a class="btn ghost" href="https://jelanithompson.bandcamp.com/album/a-east-side-sit-down">🎵 Album $7</a>
+</div>
+<p class="fine">Free to play right here. Best score saves on this device. Tips and the in-game Night pack go straight to Jelani.</p>
+</body>
+</html>

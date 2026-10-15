@@ -39,6 +39,7 @@ async function load() {
           ? `<button class="btn" id="dl">⬇ Download (purchased)</button>`
           : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>
              <button class="btn" id="cashapp" style="background:#00d632">Pay with Cash App</button>`)}
+      ${Number(a.id) === 4 ? `<a class="btn" href="/play/east-side-dash.html" style="background:#d4af37;color:#111;text-decoration:none">▶ Play free in browser</a>` : ''}
       <span class="muted">${a.download_count} downloads</span>
     </div>
     <div id="payinfo" class="muted" style="margin-top:8px"></div>
