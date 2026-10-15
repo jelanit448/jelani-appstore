@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Share My Store — Jelani's App Store</title>
+<meta name="description" content="One tap to send Jelani's App Store link to anybody.">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0a0a; color: #f5f5f5; font-family: Arial, Helvetica, sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 28px 18px 40px; }
+  .badge { color: #d4af37; letter-spacing: 3px; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
+  h1 { font-size: 26px; text-align: center; margin-bottom: 6px; }
+  .sub { color: #bbb; font-size: 15px; text-align: center; margin-bottom: 30px; }
+  .bigbtn { display: block; width: 100%; max-width: 420px; background: linear-gradient(180deg, #e8c95a, #c9a227); color: #111; border: none; border-radius: 14px; padding: 22px 16px; font-size: 21px; font-weight: bold; cursor: pointer; margin-bottom: 16px; box-shadow: 0 4px 18px rgba(212,175,55,.35); }
+  .bigbtn:active { transform: scale(.98); }
+  .bigbtn.secondary { background: #1c1c1c; color: #f5f5f5; border: 2px solid #d4af37; box-shadow: none; font-size: 19px; }
+  .row { display: flex; gap: 10px; width: 100%; max-width: 420px; margin-top: 4px; }
+  .smallbtn { flex: 1; background: #1c1c1c; color: #f5f5f5; border: 1px solid #444; border-radius: 10px; padding: 14px 6px; font-size: 15px; cursor: pointer; text-align: center; text-decoration: none; }
+  .smallbtn:active { background: #2a2a2a; }
+  #status { min-height: 24px; color: #8be89b; font-size: 15px; text-align: center; margin-top: 18px; }
+  .link { color: #d4af37; word-break: break-all; text-align: center; font-size: 14px; margin-top: 8px; }
+  .tip { color: #888; font-size: 13px; text-align: center; margin-top: 30px; max-width: 420px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="badge">★ EXCLUSIVE ★</div>
+  <h1>Send My Store Link</h1>
+  <p class="sub">Tap a button, pick who gets it, hit send. That's it.</p>
+
+  <button class="bigbtn" id="shareStore">📤 Send My Store Link</button>
+  <button class="bigbtn secondary" id="shareGame">🎮 Send East Side Dash Link</button>
+
+  <div class="row">
+    <a class="smallbtn" id="smsLink" href="#">💬 Text It</a>
+    <a class="smallbtn" id="waLink" href="#" target="_blank" rel="noopener">🟢 WhatsApp</a>
+    <button class="smallbtn" id="copyBtn">📋 Copy Link</button>
+  </div>
+
+  <div id="status"></div>
+  <div class="link">jelani-appstore.onrender.com</div>
+
+  <p class="tip">Put this page on your home screen so the button is always one tap away:<br>Browser menu ( ⋮ ) → <b>Add to Home screen</b>.</p>
+
+<script>
+(function () {
+  var STORE_URL = 'https://jelani-appstore.onrender.com';
+  var GAME_URL = 'https://jelani-appstore.onrender.com/app.html?id=4';
+  var STORE_TEXT = 'Check out my app store — Jelani\u2019s App Store. Apps and games made by me, download them here: ' + STORE_URL;
+  var GAME_TEXT = 'Play my game East Side Dash — run through East St. Louis! Get it here: ' + GAME_URL;
+  var status = document.getElementById('status');
+
+  function say(msg) { if (status) status.textContent = msg; }
+
+  function copyText(text, doneMsg) {
+    function done() { say(doneMsg); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+    } else { fallbackCopy(text); done(); }
+  }
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  function share(url, text, title) {
+    if (navigator.share) {
+      navigator.share({ title: title, text: text, url: url }).then(function () {
+        say('Sent! ✅');
+      }).catch(function () { /* user closed the picker — no error needed */ });
+    } else {
+      copyText(text, 'Link copied — paste it to anybody ✅');
+    }
+  }
+
+  var b1 = document.getElementById('shareStore');
+  if (b1) b1.addEventListener('click', function () { share(STORE_URL, STORE_TEXT, 'Jelani\u2019s App Store'); });
+  var b2 = document.getElementById('shareGame');
+  if (b2) b2.addEventListener('click', function () { share(GAME_URL, GAME_TEXT, 'East Side Dash'); });
+
+  var sms = document.getElementById('smsLink');
+  if (sms) sms.setAttribute('href', 'sms:?&body=' + encodeURIComponent(STORE_TEXT));
+  var wa = document.getElementById('waLink');
+  if (wa) wa.setAttribute('href', 'https://wa.me/?text=' + encodeURIComponent(STORE_TEXT));
+  var cp = document.getElementById('copyBtn');
+  if (cp) cp.addEventListener('click', function () { copyText(STORE_URL, 'Store link copied — paste it anywhere ✅'); });
+})();
+</script>
+</body>
+</html>
