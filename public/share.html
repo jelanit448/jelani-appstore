@@ -81,7 +81,7 @@
   if (b2) b2.addEventListener('click', function () { share(GAME_URL, GAME_TEXT, 'East Side Dash'); });
 
   var sms = document.getElementById('smsLink');
-  if (sms) sms.setAttribute('href', 'sms:?&body=' + encodeURIComponent(STORE_TEXT));
+  if (sms) sms.setAttribute('href', 'sms:?body=' + encodeURIComponent(STORE_TEXT));
   var wa = document.getElementById('waLink');
   if (wa) wa.setAttribute('href', 'https://wa.me/?text=' + encodeURIComponent(STORE_TEXT));
   var cp = document.getElementById('copyBtn');
