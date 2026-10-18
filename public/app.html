@@ -43,7 +43,7 @@ async function load() {
       ${a.price_cents === 0
         ? `<button class="btn" id="dl">⬇ Download free</button>`
         : (a.owned
-          ? `<button class="btn" id="dl">⬇ Download (purchased)</button>`
+          ? `<button class="btn" id="dl">⬇ ${a.is_owner ? 'Download (owner — free)' : 'Download (purchased)'}</button>`
           : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>
              <button class="btn" id="cashapp" style="background:#00d632">Pay with Cash App</button>
              <div id="paypalbtn" style="margin-top:8px;max-width:340px"></div>`)}

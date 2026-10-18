@@ -310,13 +310,13 @@ app.get('/api/apps/:id', (req, res) => {
   const avg = db.prepare('SELECT AVG(rating) AS avg, COUNT(*) AS n FROM reviews WHERE app_id = ?').get(appRow.id);
   let owned = false;
   if (req.user) {
-    owned = appRow.price_cents === 0 || !!db.prepare(
+    owned = appRow.price_cents === 0 || isOwner || isDev || !!db.prepare(
       'SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?'
     ).get(appRow.id, req.user.id);
   }
   const { file_path, ...safe } = appRow; // never leak server paths
   res.json({
-    app: { ...safe, avg_rating: avg.avg, review_count: avg.n, owned },
+    app: { ...safe, avg_rating: avg.avg, review_count: avg.n, owned, is_owner: !!isOwner },
     screenshots: shots.map((s) => `/api/screenshots/${s.id}`),
     reviews,
     demoBanner: money.DEMO_BANNER,
