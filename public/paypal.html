@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PayPal payments — Jelani's App Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header class="top"><a class="logo" href="/">📱 Jelani's <span>App Store</span></a><nav id="nav"></nav></header>
+<main>
+  <div id="demo"></div><div id="msg"></div>
+  <div class="panel"><h2>PayPal payments</h2>
+    <p class="muted">Lets buyers pay with PayPal on every paid app. Money goes to your PayPal account; purchases land in the ledger with the same 90/10 split as the other rails.</p>
+    <div id="pp_status" class="muted">Loading…</div>
+    <div style="margin-top:14px;max-width:480px">
+      <label class="f">Client ID</label>
+      <input class="f" id="pp_id" placeholder="AYS..." autocomplete="off">
+      <label class="f" style="margin-top:10px">Secret</label>
+      <input class="f" id="pp_secret" type="password" placeholder="Paste the PayPal secret" autocomplete="off">
+      <label class="f" style="margin-top:10px">Environment</label>
+      <select class="f" id="pp_env">
+        <option value="sandbox">Sandbox (test money)</option>
+        <option value="live">Live (real money)</option>
+      </select>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="savePayPal()">Save PayPal keys</button>
+      </div>
+      <p class="muted" style="margin-top:10px">Keys are stored on the server only — they are never shown back. Leave the Secret blank to keep the current one. Start in <b>sandbox</b> until a real PayPal business account is verified, then switch to <b>live</b>.</p>
+      <div id="pp_msg" style="margin-top:8px"></div>
+    </div>
+  </div>
+</main>
+<footer><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · © 2026 Jelani Thompson</footer>
+<script src="/js/common.js"></script>
+<script>
+async function loadPayPal() {
+  const u = await me();
+  if (!u || u.role !== 'owner') { document.getElementById('pp_status').innerHTML = '<span class="errmsg">Owner only.</span>'; return; }
+  try {
+    const d = await api('/api/owner/paypal');
+    document.getElementById('pp_status').innerHTML =
+      d.configured
+        ? `<span class="okmsg">✅ PayPal connected — <b>${esc(d.env)}</b> mode${d.client_id_last4 ? ' · client id ends …' + esc(d.client_id_last4) : ''} (source: ${esc(d.source)})</span>`
+        : '<span class="muted">Not connected yet — paste your keys below.</span>';
+    if (d.env) document.getElementById('pp_env').value = d.env;
+  } catch (e) { showErr(document.getElementById('pp_status'), e.message); }
+}
+async function savePayPal() {
+  const msg = document.getElementById('pp_msg');
+  msg.innerHTML = '<span class="muted">Saving…</span>';
+  const body = { env: document.getElementById('pp_env').value };
+  const cid = document.getElementById('pp_id').value.trim();
+  const sec = document.getElementById('pp_secret').value.trim();
+  if (cid) body.client_id = cid;
+  if (sec) body.secret = sec;
+  try {
+    const d = await api('/api/owner/paypal', { method: 'POST', body });
+    document.getElementById('pp_secret').value = '';
+    document.getElementById('pp_id').value = '';
+    msg.innerHTML = `<span class="okmsg">✅ Saved — PayPal is now connected in <b>${esc(d.env)}</b> mode.</span>`;
+    loadPayPal();
+  } catch (e) { msg.innerHTML = ''; showErr(msg, e.message); }
+}
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadPayPal(); })();
+</script>
+</body>
+</html>

@@ -45,7 +45,8 @@ async function load() {
         : (a.owned
           ? `<button class="btn" id="dl">⬇ Download (purchased)</button>`
           : `<button class="btn" id="buy">Buy for $${(a.price_cents / 100).toFixed(2)}</button>
-             <button class="btn" id="cashapp" style="background:#00d632">Pay with Cash App</button>`)}
+             <button class="btn" id="cashapp" style="background:#00d632">Pay with Cash App</button>
+             <div id="paypalbtn" style="margin-top:8px;max-width:340px"></div>`)}
       ${Number(a.id) === 4 ? `<a class="btn" href="/play/east-side-dash.html" style="background:#d4af37;color:#111;text-decoration:none">▶ Play free in browser</a>` : ''}
       <span class="muted">${a.download_count} downloads</span>
     </div>
@@ -154,6 +155,43 @@ async function load() {
       };
     } catch (e) { box.innerHTML = ''; showErr(document.getElementById('msg'), e.message); }
   };
+  // ---- Pay with PayPal (only rendered when the owner connected it) ----
+  // The SDK renders PayPal's own button into #paypalbtn; nothing shows when
+  // PayPal is unconfigured, so there is never a dead button.
+  async function renderPayPalBtn() {
+    const box = document.getElementById('paypalbtn');
+    if (!box) return;
+    try {
+      const cfg = await api('/api/config');
+      if (!cfg.paypalConfigured) return;
+      const key = await api('/api/paypal/client-id');
+      if (!key.client_id) return;
+      const s = document.createElement('script');
+      s.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(key.client_id) + '&currency=USD&intent=capture';
+      s.onload = () => {
+        try {
+          paypal.Buttons({
+            createOrder: async () => {
+              const r = await api('/api/paypal/create-order', { method: 'POST', body: { app_id: Number(id) } });
+              return r.order_id;
+            },
+            onApprove: async (data) => {
+              const info = document.getElementById('payinfo');
+              info.innerHTML = '<span class="muted">Confirming PayPal payment…</span>';
+              try {
+                const r = await api('/api/paypal/capture', { method: 'POST', body: { order_id: data.orderID } });
+                info.innerHTML = '<div class="okmsg">✅ PayPal payment confirmed — download unlocked.</div>';
+                setTimeout(load, 1200);
+              } catch (e) { info.innerHTML = ''; showErr(document.getElementById('msg'), e.message); }
+            },
+            onError: () => {},
+          }).render('#paypalbtn');
+        } catch (e) { /* leave the button hidden */ }
+      };
+      document.head.appendChild(s);
+    } catch (e) { /* PayPal stays hidden when unavailable */ }
+  }
+  renderPayPalBtn();
   document.getElementById('reviews').innerHTML = d.reviews.length
     ? d.reviews.map(r => `<p><b>${esc(r.username)}</b> <span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span><br>${esc(r.text)}<br><span class="muted">${esc(r.created_at)}</span></p>`).join('')
     : '<p class="muted">No reviews yet — be the first.</p>';

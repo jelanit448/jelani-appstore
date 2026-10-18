@@ -27,6 +27,7 @@ const bcrypt = require('bcryptjs');
 const { initDb, txn, TERMS_VERSION } = require('./lib/db');
 const money = require('./lib/money');
 const stripe = require('./lib/stripe');
+const paypal = require('./lib/paypal');
 
 const PORT = process.env.PORT || 3000;
 // Owner's Cash App $cashtag for manual payments (no Stripe/ID needed).
@@ -46,6 +47,13 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const db = initDb();
+
+// PayPal reads its owner-saved keys from the settings table (env vars win
+// when set). The secret is never returned to any client.
+paypal.bindSettingsReader((key) => {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : '';
+});
 
 const app = express();
 app.set('trust proxy', 1);
@@ -249,6 +257,7 @@ app.get('/api/config', (req, res) => {
     demoBanner: money.DEMO_BANNER,
     stripeConfigured: stripe.configured,
     stripeLive: stripe.live,
+    paypalConfigured: paypal.configured(),
     termsVersion: TERMS_VERSION,
     platformFeeBps: money.PLATFORM_FEE_BPS,
     maxUploadBytes: MAX_FILE_BYTES,
@@ -864,6 +873,142 @@ app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res
   if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
   db.prepare(`UPDATE cashapp_orders SET status = 'rejected' WHERE id = ?`).run(id);
   res.json({ ok: true, order_id: id, status: 'rejected' });
+});
+
+// ---------------------------------------------------------------------------
+// money: PayPal checkout (buyer's choice alongside Cash App / Stripe)
+// ---------------------------------------------------------------------------
+
+// Public client ID for the PayPal JS SDK button. The Client ID is publishable
+// by PayPal's design (like a Stripe publishable key) — the SECRET never
+// leaves the server.
+app.get('/api/paypal/client-id', (req, res) => {
+  if (!paypal.configured()) return res.status(404).json({ error: 'PayPal is not connected.' });
+  res.json({ client_id: paypal.creds().id, env: paypal.effectiveEnv() });
+});
+
+// Same purchase pre-checks as the Cash App flow: one definition, no drift.
+function paypalAppCheck(appId, buyerId) {
+  const appRow = q.appById.get(appId);
+  if (!appRow || appRow.status !== 'approved') return { error: 'App not found.', code: 404 };
+  if (appRow.price_cents <= 0) return { error: 'This app is free — just download it.', code: 400 };
+  if (appRow.developer_id === buyerId) return { error: 'You cannot buy your own app.', code: 400 };
+  const already = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(appRow.id, buyerId);
+  if (already) return { error: 'Already purchased.', code: 409 };
+  return { appRow };
+}
+
+// Create a PayPal order for one paid app. The amount always comes from the DB
+// price — never from the browser.
+app.post('/api/paypal/create-order', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), async (req, res) => {
+  if (!paypal.configured()) {
+    return res.status(503).json({ error: 'PayPal checkout is not connected yet.', code: 'PAYPAL_UNCONFIGURED' });
+  }
+  const appId = toId((req.body || {}).app_id);
+  if (!appId) return res.status(404).json({ error: 'App not found.' });
+  const check = paypalAppCheck(appId, req.user.id);
+  if (check.error) return res.status(check.code).json({ error: check.error });
+  try {
+    const { id: orderId } = await paypal.createOrder({
+      appId: check.appRow.id,
+      appName: `${check.appRow.name} — Jelani's App Store`,
+      amountCents: check.appRow.price_cents,
+    });
+    db.prepare(
+      `INSERT INTO paypal_orders (order_id, app_id, buyer_id, amount_cents, status)
+       VALUES (?,?,?,?,'pending')`
+    ).run(orderId, check.appRow.id, req.user.id, check.appRow.price_cents);
+    res.json({ ok: true, order_id: orderId });
+  } catch (e) {
+    console.error('[paypal-create]', e.code || e.message);
+    res.status(502).json({ error: 'Could not start PayPal checkout. Please try again.', code: e.code || 'PAYPAL_ERROR' });
+  }
+});
+
+// Capture a PayPal order. On a verified COMPLETED capture it writes the same
+// ledger + purchases rows the other rails write, so the download unlocks
+// identically. Idempotent: capturing the same order twice records one purchase.
+app.post('/api/paypal/capture', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), async (req, res) => {
+  if (!paypal.configured()) {
+    return res.status(503).json({ error: 'PayPal checkout is not connected yet.', code: 'PAYPAL_UNCONFIGURED' });
+  }
+  const orderId = String((req.body || {}).order_id || '').slice(0, 64);
+  if (!orderId) return res.status(400).json({ error: 'Missing order_id.' });
+  const row = db.prepare('SELECT * FROM paypal_orders WHERE order_id = ? AND buyer_id = ?').get(orderId, req.user.id);
+  if (!row) return res.status(404).json({ error: 'PayPal order not found.' });
+  if (row.status === 'completed') {
+    const owned = db.prepare('SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?').get(row.app_id, req.user.id);
+    return res.json({ ok: true, owned: Boolean(owned), app_id: row.app_id, ledger_id: row.ledger_id, duplicate: true });
+  }
+  try {
+    const cap = await paypal.captureOrder(orderId);
+    // Verify PayPal's word against the DB price before writing anything.
+    if (cap.status !== 'COMPLETED' || cap.currency !== 'USD' || cap.amountCents !== row.amount_cents) {
+      return res.status(502).json({ error: 'PayPal did not confirm this payment — no purchase was recorded.' });
+    }
+    const appRow = q.appById.get(row.app_id);
+    if (!appRow || appRow.status !== 'approved' || appRow.price_cents !== row.amount_cents) {
+      return res.status(409).json({ error: 'The app or its price changed — no purchase was recorded.' });
+    }
+    const { developer, platform } = money.split(row.amount_cents);
+    const note = `PayPal payment ${cap.captureId || orderId} — ${paypal.live() ? 'real money' : 'sandbox (test money)'}`;
+    const ledgerId = txn(db, () => {
+      const li = db.prepare(
+        `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+         VALUES ('purchase',?,?,?,?,?,?,?)`
+      ).run(row.app_id, row.buyer_id, appRow.developer_id, row.amount_cents, platform, developer, note);
+      db.prepare('INSERT OR IGNORE INTO purchases (app_id, buyer_id, ledger_id) VALUES (?,?,?)')
+        .run(row.app_id, row.buyer_id, li.lastInsertRowid);
+      db.prepare(`UPDATE paypal_orders SET status = 'completed', ledger_id = ? WHERE id = ?`)
+        .run(li.lastInsertRowid, row.id);
+      return li.lastInsertRowid;
+    });
+    res.json({ ok: true, owned: true, app_id: row.app_id, ledger_id: Number(ledgerId) });
+  } catch (e) {
+    console.error('[paypal-capture]', e.code || e.message);
+    res.status(502).json({ error: 'Could not confirm the PayPal payment. Please try again.', code: e.code || 'PAYPAL_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// owner: PayPal settings (Client ID + Secret — stored server-side only)
+// ---------------------------------------------------------------------------
+app.get('/api/owner/paypal', requireRole('owner'), (req, res) => {
+  const fromEnv = Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET);
+  let last4 = '';
+  if (!fromEnv) {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'paypal_client_id'").get();
+    if (row && row.value) last4 = String(row.value).slice(-4);
+  }
+  res.json({
+    configured: paypal.configured(),
+    env: paypal.effectiveEnv(),
+    live: paypal.live(),
+    source: fromEnv ? 'env' : 'settings',
+    client_id_last4: last4 || null,
+  });
+});
+
+app.post('/api/owner/paypal', requireRole('owner'), (req, res) => {
+  const { client_id, secret, env } = req.body || {};
+  const e = String(env || 'sandbox').toLowerCase();
+  if (!['sandbox', 'live'].includes(e)) return res.status(400).json({ error: "env must be 'sandbox' or 'live'." });
+  const cid = String(client_id || '').trim();
+  const sec = String(secret || '').trim();
+  const upsert = db.prepare(
+    'INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+  );
+  if (!cid && !sec) {
+    // Env-only update: keep the saved keys, just switch sandbox/live.
+    upsert.run('paypal_env', e);
+    return res.json({ ok: true, configured: paypal.configured(), env: e, source: 'settings' });
+  }
+  if (!cid || cid.length < 8) return res.status(400).json({ error: 'A valid PayPal Client ID is required.' });
+  if (!sec || sec.length < 8) return res.status(400).json({ error: 'A valid PayPal Secret is required.' });
+  upsert.run('paypal_client_id', cid);
+  upsert.run('paypal_secret', sec);
+  upsert.run('paypal_env', e);
+  res.json({ ok: true, configured: true, env: e, source: 'settings' });
 });
 
 // Internal: read-only Cash App totals for the daily cap watcher. Gated by the
