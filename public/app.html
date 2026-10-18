@@ -30,6 +30,13 @@ async function load() {
       <div class="muted">${esc(a.developer_name)} · ${esc(a.category)} · v${esc(a.version)} · <span class="badge ${a.status}">${a.status}</span></div>
       <div>${stars(a.avg_rating, a.review_count)}</div></div>
     </div>
+    <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+      <button class="btn" id="shareapp" style="background:#d4af37;color:#111">📤 Send This App</button>
+      <a class="btn" id="shareSms" href="#" style="background:#1c1c1c;color:#f5f5f5;text-decoration:none">💬 Text It</a>
+      <a class="btn" id="shareWa" href="#" target="_blank" rel="noopener" style="background:#1c1c1c;color:#f5f5f5;text-decoration:none">🟢 WhatsApp</a>
+      <button class="btn" id="shareCopy" style="background:#1c1c1c;color:#f5f5f5">📋 Copy Link</button>
+    </div>
+    <div id="shareMsg" class="muted" style="margin-top:6px"></div>
     <p style="white-space:pre-wrap;margin-top:14px">${esc(a.description)}</p>
     ${(d.screenshots && d.screenshots.length) ? `<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">${d.screenshots.map(s => `<img src="${s}" alt="App picture" style="width:200px;max-width:45vw;border-radius:12px;border:1px solid #333">`).join('')}</div>` : ''}
     <div class="row" style="margin-top:14px">
@@ -47,6 +54,40 @@ async function load() {
     </div>`;
   const dl = document.getElementById('dl');
   if (dl) dl.onclick = () => { location.href = '/api/apps/' + id + '/download'; setTimeout(load, 1500); };
+  // ---- Share THIS app (same choices as the store share page) ----
+  const appUrl = location.origin + '/app.html?id=' + a.id;
+  const shareText = 'Check out ' + a.name + ' on Jelani\u2019s App Store \u2014 get it here: ' + appUrl;
+  const shareMsg = document.getElementById('shareMsg');
+  const copyShare = () => {
+    const done = () => { shareMsg.textContent = 'Link copied \u2014 paste it to anybody \u2705'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(shareText).then(done, () => {
+        const ta = document.createElement('textarea');
+        ta.value = shareText; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta); done();
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = shareText; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); done();
+    }
+  };
+  const shBtn = document.getElementById('shareapp');
+  if (shBtn) shBtn.onclick = () => {
+    if (navigator.share) {
+      navigator.share({ title: a.name + ' \u2014 Jelani\u2019s App Store', text: shareText, url: appUrl }).catch(() => {});
+    } else { copyShare(); }
+  };
+  const sSms = document.getElementById('shareSms');
+  if (sSms) sSms.href = 'sms:?body=' + encodeURIComponent(shareText);
+  const sWa = document.getElementById('shareWa');
+  if (sWa) sWa.href = 'https://wa.me/?text=' + encodeURIComponent(shareText);
+  const sCp = document.getElementById('shareCopy');
+  if (sCp) sCp.onclick = copyShare;
   const buy = document.getElementById('buy');
   if (buy) buy.onclick = async () => {
     const info = document.getElementById('payinfo');
