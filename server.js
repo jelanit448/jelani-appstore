@@ -911,6 +911,47 @@ app.post('/api/owner/apps/:id/price', requireRole('owner'), (req, res) => {
   res.json({ ok: true, app_id: id, price_cents: cents, price: money.formatUsd(cents) });
 });
 
+// Owner: fix an app's listing description (truth-in-advertising edits).
+app.post('/api/owner/apps/:id/description', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const appRow = id ? q.appById.get(id) : null;
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const desc = String(((req.body || {}).description) || '').slice(0, 8000);
+  db.prepare('UPDATE apps SET description = ? WHERE id = ?').run(desc, id);
+  res.json({ ok: true, app_id: id });
+});
+
+// Owner: attach a screenshot (a completed 'screenshot' kind upload) to a listing.
+app.post('/api/owner/apps/:id/screenshots', requireRole('owner'), (req, res) => {
+  const { upload_id } = req.body || {};
+  const meta = readMeta(upload_id);
+  if (!meta || meta.user_id !== req.user.id || meta.kind !== 'screenshot') {
+    return res.status(404).json({ error: 'Upload not found.' });
+  }
+  if (meta.received_bytes !== meta.size_bytes) {
+    return res.status(400).json({ error: `Incomplete upload: ${meta.received_bytes}/${meta.size_bytes} bytes.` });
+  }
+  const id = toId(req.params.id);
+  const appRow = id ? q.appById.get(id) : null;
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const finalName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${meta.filename}`;
+  const finalPath = path.join(UPLOAD_DIR, finalName);
+  fs.renameSync(uploadPart(upload_id), finalPath);
+  fs.unlinkSync(uploadMeta(upload_id));
+  const info = db.prepare('INSERT INTO screenshots (app_id, file_path) VALUES (?,?)').run(id, finalPath);
+  res.json({ ok: true, app_id: id, screenshot_id: Number(info.lastInsertRowid) });
+});
+
+// Owner: remove a stale screenshot from a listing.
+app.delete('/api/owner/screenshots/:shotId', requireRole('owner'), (req, res) => {
+  const sid = toId(req.params.shotId);
+  const row = sid ? db.prepare('SELECT id, file_path FROM screenshots WHERE id = ?').get(sid) : null;
+  if (!row) return res.status(404).json({ error: 'Screenshot not found.' });
+  db.prepare('DELETE FROM screenshots WHERE id = ?').run(sid);
+  try { if (row.file_path && fs.existsSync(row.file_path)) fs.unlinkSync(row.file_path); } catch { /* best effort */ }
+  res.json({ ok: true, screenshot_id: sid });
+});
+
 // Owner: list all apps (for the prices panel).
 app.get('/api/owner/apps', requireRole('owner'), (req, res) => {
   const rows = db.prepare(
