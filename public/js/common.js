@@ -30,7 +30,7 @@ let _meMustTerms = false, _meMustPw = false;
 async function renderHeader(active) {
   const u = await me().catch(() => null);
   const nav = document.getElementById('nav');
-  let links = `<a href="/">Store</a>`;
+  let links = `<a href="/">Store</a><a href="/market.html">Marketplace</a>`;
   if (u) {
     if (u.role === 'owner' || u.role === 'developer') links += `<a href="/upload.html">Upload app</a><a href="/appmaker.html">App Maker</a><a href="/dashboard.html">Dashboard</a>`;
     else links += `<a href="/dashboard.html">Become a developer</a>`;

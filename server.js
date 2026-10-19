@@ -505,16 +505,22 @@ function readMeta(id) {
 }
 
 app.post('/api/upload/init', requireAuth, (req, res) => {
-  if (!['owner', 'developer'].includes(req.user.role)) {
-    return res.status(403).json({ error: 'Only developers can upload. Use "Become a developer" first.' });
-  }
   const { filename, size_bytes, kind } = req.body || {};
   const size = Number(size_bytes);
   if (!filename || !Number.isInteger(size) || size <= 0 || size > MAX_FILE_BYTES) {
     return res.status(400).json({ error: `size_bytes must be 1–${MAX_FILE_BYTES}.` });
   }
-  if (!['appfile', 'screenshot', 'icon'].includes(kind)) {
-    return res.status(400).json({ error: "kind must be 'appfile', 'screenshot', or 'icon'." });
+  if (!['appfile', 'screenshot', 'icon', 'marketphoto'].includes(kind)) {
+    return res.status(400).json({ error: "kind must be 'appfile', 'screenshot', 'icon', or 'marketphoto'." });
+  }
+  // Marketplace photos: any signed-in user may upload a listing photo.
+  // App files / screenshots / icons stay restricted to developers + owner.
+  const mayUpload = ['owner', 'developer'].includes(req.user.role) || kind === 'marketphoto';
+  if (!mayUpload) {
+    return res.status(403).json({ error: 'Only developers can upload. Use "Become a developer" first.' });
+  }
+  if (kind === 'marketphoto' && size > 15 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Listing photos must be 15 MB or smaller.' });
   }
   const id = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(uploadPart(id), Buffer.alloc(0));
@@ -872,6 +878,316 @@ app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
   db.prepare(`UPDATE cashapp_orders SET status = 'rejected' WHERE id = ?`).run(id);
+  res.json({ ok: true, order_id: id, status: 'rejected' });
+});
+
+// ---------------------------------------------------------------------------
+// money: Marketplace — buy & sell between users (free to list, 10% on sale)
+// ---------------------------------------------------------------------------
+// Free to list, free to browse, free to claim. The ONLY platform charge is
+// 10% of a completed sale: buyer pays the seller's $cashtag in their own
+// Cash App, claims the order, and the owner approves after seeing the
+// payment. Approval writes the ledger row (seller 90 / platform 10) and
+// marks the listing sold. Nothing here is seeded — every listing, want and
+// order is a real user action.
+
+const MARKET_CATEGORIES = [
+  'Electronics', 'Cars & Bikes', 'Home & Furniture', 'Clothes & Shoes',
+  'Games & Toys', 'Music', 'Books', 'Services', 'Other',
+];
+const MARKET_PHOTO_RE = /\.(png|jpe?g|webp|gif)$/i;
+
+function marketListingRow(row) {
+  if (!row) return null;
+  const { ...rest } = row;
+  rest.photo_url = row.photo_path ? `/api/market/photos/${row.id}` : null;
+  return rest;
+}
+
+// Keyword matching: the "find people for the item" engine. Matches listings
+// to wants ONLY from real in-app data — keyword overlap on title/description
+// plus a category bonus. It never claims to search the internet.
+const MATCH_STOPWORDS = new Set(
+  ('the and for with this that from your you are has have will sale sell selling sold ' +
+   'new used like looking look want wants wanted need needs please free good great ' +
+   'buy buyer item items thing things get got all any our out per very much also ' +
+   'only just now then than when where what who how why can could should would ' +
+   'there their them they was were been being into over under each every some ' +
+   'such more most other others about after before again once here near nearby ' +
+   'pickup pick local area cash best offer offers obo firm trade trades deliver ' +
+   'delivery shipping shipped condition message inbox text me dm asking price').split(' ')
+);
+function marketTokens(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[^a-z0-9$ ]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !MATCH_STOPWORDS.has(w));
+}
+function marketMatchScore(listing, want) {
+  const lt = new Set(marketTokens(listing.title + ' ' + listing.description + ' ' + listing.category));
+  const hits = marketTokens(want.keywords).filter((t) => lt.has(t));
+  const categoryBonus = (listing.category && want.category && listing.category === want.category) ? 1 : 0;
+  return { score: hits.length + categoryBonus, hits, categoryBonus };
+}
+
+// Create a listing (goes to pending moderation).
+app.post('/api/market/listings', requireAuth, rateLimit({ windowMs: 3600_000, max: 30 }), (req, res) => {
+  const { title, description, price_cents, category, seller_cashtag, photo_upload_id } = req.body || {};
+  const t = String(title || '').trim();
+  if (t.length < 2 || t.length > 120) return res.status(400).json({ error: 'Title: 2–120 characters.' });
+  const desc = String(description || '').slice(0, 2000);
+  const price = Number(price_cents);
+  if (!Number.isInteger(price) || price < 0) return res.status(400).json({ error: 'price_cents must be a non-negative integer.' });
+  const cat = MARKET_CATEGORIES.includes(category) ? category : 'Other';
+  const tag = String(seller_cashtag || '').trim();
+  if (tag && !CASHTAG_RE.test(tag)) {
+    return res.status(400).json({ error: 'Seller $cashtag must start with $ (letters/numbers only).' });
+  }
+  // Optional photo via the chunked upload flow (kind 'marketphoto').
+  let photoPath = null;
+  if (photo_upload_id) {
+    const meta = readMeta(photo_upload_id);
+    if (!meta || meta.user_id !== req.user.id || meta.kind !== 'marketphoto') {
+      return res.status(404).json({ error: 'Photo upload not found.' });
+    }
+    if (meta.received_bytes !== meta.size_bytes) {
+      return res.status(400).json({ error: `Photo upload incomplete: ${meta.received_bytes}/${meta.size_bytes} bytes.` });
+    }
+    if (!MARKET_PHOTO_RE.test(meta.filename)) {
+      return res.status(400).json({ error: 'Photo must be a PNG, JPG, WebP, or GIF image.' });
+    }
+    photoPath = path.join(UPLOAD_DIR, `market-${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${meta.filename}`);
+    // copy + unlink instead of rename: tmp and upload dirs may live on
+    // different filesystems in some environments (renameSync throws EXDEV).
+    fs.copyFileSync(uploadPart(photo_upload_id), photoPath);
+    fs.unlinkSync(uploadPart(photo_upload_id));
+    fs.unlinkSync(uploadMeta(photo_upload_id));
+  }
+  const info = db.prepare(
+    `INSERT INTO market_listings (seller_user_id, title, description, price_cents, category, photo_path, seller_cashtag)
+     VALUES (?,?,?,?,?,?,?)`
+  ).run(req.user.id, t, desc, price, cat, photoPath, tag);
+  const row = db.prepare(
+    `SELECT m.*, u.username AS seller_name FROM market_listings m JOIN users u ON u.id = m.seller_user_id WHERE m.id = ?`
+  ).get(info.lastInsertRowid);
+  res.json({ ok: true, listing: marketListingRow(row), message: 'Listed! Waiting for owner approval before it goes live.' });
+});
+
+// Public browse: approved listings only (sold items included, marked sold).
+app.get('/api/market/listings', (req, res) => {
+  const { search = '', category = '' } = req.query;
+  let sql = `SELECT m.*, u.username AS seller_name FROM market_listings m
+             JOIN users u ON u.id = m.seller_user_id
+             WHERE m.status IN ('approved','sold')`;
+  const params = [];
+  if (search) { sql += ' AND (m.title LIKE ? OR m.description LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+  if (category) { sql += ' AND m.category = ?'; params.push(category); }
+  sql += ' ORDER BY m.created_at DESC LIMIT 200';
+  res.json({ ok: true, listings: db.prepare(sql).all(...params).map(marketListingRow), categories: MARKET_CATEGORIES });
+});
+
+// Single listing. Pending/rejected listings are visible only to the seller and the owner.
+app.get('/api/market/listings/:id', (req, res) => {
+  const id = toId(req.params.id);
+  if (!id) return res.status(404).json({ error: 'Listing not found.' });
+  const row = db.prepare(
+    `SELECT m.*, u.username AS seller_name FROM market_listings m JOIN users u ON u.id = m.seller_user_id WHERE m.id = ?`
+  ).get(id);
+  if (!row) return res.status(404).json({ error: 'Listing not found.' });
+  if ((row.status === 'pending' || row.status === 'rejected') &&
+      !(req.user && (req.user.id === row.seller_user_id || req.user.role === 'owner'))) {
+    return res.status(404).json({ error: 'Listing not found.' });
+  }
+  res.json({ ok: true, listing: marketListingRow(row) });
+});
+
+// Serve a listing photo (file must live under the upload dir).
+app.get('/api/market/photos/:id', (req, res) => {
+  const id = toId(req.params.id);
+  if (!id) return res.status(404).json({ error: 'Not found.' });
+  const row = db.prepare('SELECT photo_path, status, seller_user_id FROM market_listings WHERE id = ?').get(id);
+  if (!row || !row.photo_path) return res.status(404).json({ error: 'Not found.' });
+  const p = path.resolve(row.photo_path);
+  if (!p.startsWith(path.resolve(UPLOAD_DIR) + path.sep)) return res.status(404).json({ error: 'Not found.' });
+  if ((row.status === 'pending' || row.status === 'rejected') &&
+      !(req.user && (req.user.id === row.seller_user_id || req.user.role === 'owner'))) {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+  fs.access(p, fs.constants.R_OK, (e) => e ? res.status(404).json({ error: 'Not found.' }) : res.sendFile(p));
+});
+
+// Post a "looking for" want — the other half of the matching engine.
+app.post('/api/market/wants', requireAuth, rateLimit({ windowMs: 3600_000, max: 30 }), (req, res) => {
+  const { keywords, category, max_price_cents, contact } = req.body || {};
+  const kw = String(keywords || '').trim().slice(0, 200);
+  if (kw.length < 2) return res.status(400).json({ error: 'Say what you are looking for (2+ characters).' });
+  const cat = MARKET_CATEGORIES.includes(category) ? category : 'Other';
+  let max = null;
+  if (max_price_cents !== undefined && max_price_cents !== null && String(max_price_cents) !== '') {
+    max = Number(max_price_cents);
+    if (!Number.isInteger(max) || max < 0) return res.status(400).json({ error: 'max_price_cents must be a non-negative integer.' });
+  }
+  const info = db.prepare(
+    `INSERT INTO market_wants (user_id, keywords, category, max_price_cents, contact)
+     VALUES (?,?,?,?,?)`
+  ).run(req.user.id, kw, cat, max, String(contact || '').slice(0, 200));
+  const row = db.prepare(
+    `SELECT w.*, u.username FROM market_wants w JOIN users u ON u.id = w.user_id WHERE w.id = ?`
+  ).get(info.lastInsertRowid);
+  res.json({ ok: true, want: row });
+});
+
+// Everyone's open wants (so sellers can find people who need the item).
+app.get('/api/market/wants', (req, res) => {
+  const { category = '' } = req.query;
+  let sql = `SELECT w.*, u.username FROM market_wants w JOIN users u ON u.id = w.user_id`;
+  const params = [];
+  if (category) { sql += ' WHERE w.category = ?'; params.push(category); }
+  sql += ' ORDER BY w.created_at DESC LIMIT 200';
+  res.json({ ok: true, wants: db.prepare(sql).all(...params) });
+});
+
+// The "find people for the items" engine: my listings ↔ in-app wants, and
+// my wants ↔ in-app listings. Real matching only — keyword overlap on
+// title/description + category — never "the whole internet".
+app.get('/api/market/matches', requireAuth, (req, res) => {
+  const myListings = db.prepare(
+    `SELECT m.*, u.username AS seller_name FROM market_listings m JOIN users u ON u.id = m.seller_user_id
+     WHERE m.seller_user_id = ? AND m.status = 'approved'`
+  ).all(req.user.id);
+  const myWants = db.prepare('SELECT * FROM market_wants WHERE user_id = ?').all(req.user.id);
+  const allWants = db.prepare(
+    `SELECT w.*, u.username FROM market_wants w JOIN users u ON u.id = w.user_id WHERE w.user_id != ?`
+  ).all(req.user.id);
+  const allListings = db.prepare(
+    `SELECT m.*, u.username AS seller_name FROM market_listings m JOIN users u ON u.id = m.seller_user_id
+     WHERE m.status = 'approved' AND m.seller_user_id != ?`
+  ).all(req.user.id);
+
+  const listingMatches = myListings.map((l) => ({
+    listing: marketListingRow(l),
+    matches: allWants
+      .map((w) => ({ want: w, ...marketMatchScore(l, w) }))
+      .filter((m) => m.score >= 2)
+      .map((m) => ({
+        username: m.want.username, keywords: m.want.keywords, category: m.want.category,
+        contact: m.want.contact, reason: matchReason(m),
+        price_ok: m.want.max_price_cents == null || l.price_cents <= m.want.max_price_cents,
+      })),
+  }));
+  const wantMatches = myWants.map((w) => ({
+    want: w,
+    matches: allListings
+      .map((l) => ({ listing: marketListingRow(l), ...marketMatchScore(l, w) }))
+      .filter((m) => m.score >= 2)
+      .map((m) => ({ ...m.listing, reason: matchReason(m),
+        price_ok: w.max_price_cents == null || m.listing.price_cents <= w.max_price_cents })),
+  }));
+  res.json({ ok: true, listing_matches: listingMatches, want_matches: wantMatches });
+});
+function matchReason(m) {
+  const parts = [];
+  if (m.hits && m.hits.length) parts.push('matches "' + m.hits.slice(0, 3).join(', ') + '"');
+  if (m.categoryBonus) parts.push('same category');
+  return parts.join(' · ') || 'weak match';
+}
+
+// Buyer claims a purchase: pays the seller's $cashtag in their own Cash App,
+// then records their $cashtag as proof. Owner approves after seeing payment.
+app.post('/api/market/orders', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
+  const listingId = toId((req.body || {}).listing_id);
+  const cashtag = String((req.body || {}).buyer_cashtag || '').trim();
+  if (!CASHTAG_RE.test(cashtag)) {
+    return res.status(400).json({ error: 'Enter your Cash App $cashtag (starts with $, letters/numbers only).' });
+  }
+  const listing = db.prepare('SELECT * FROM market_listings WHERE id = ?').get(listingId);
+  if (!listing || listing.status !== 'approved') return res.status(404).json({ error: 'Listing not available.' });
+  if (listing.seller_user_id === req.user.id) return res.status(400).json({ error: 'You cannot buy your own listing.' });
+  const existing = db.prepare(
+    `SELECT id FROM market_orders WHERE listing_id = ? AND buyer_user_id = ? AND status IN ('claimed','approved')`
+  ).get(listing.id, req.user.id);
+  if (existing) return res.status(409).json({ error: 'You already have an order for this listing.' });
+  const info = db.prepare(
+    `INSERT INTO market_orders (listing_id, buyer_user_id, buyer_cashtag, status)
+     VALUES (?,?,?,'claimed')`
+  ).run(listing.id, req.user.id, cashtag);
+  res.json({
+    ok: true, order_id: Number(info.lastInsertRowid), status: 'claimed',
+    message: `Pay ${money.formatUsd(listing.price_cents)} to ${listing.seller_cashtag || 'the seller'} in your Cash App, then wait for the owner to approve.`,
+  });
+});
+
+// Owner: listings waiting for review.
+app.get('/api/owner/market/pending', requireRole('owner'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT m.*, u.username AS seller_name FROM market_listings m JOIN users u ON u.id = m.seller_user_id
+     WHERE m.status = 'pending' ORDER BY m.created_at DESC LIMIT 100`
+  ).all();
+  res.json({ ok: true, pending: rows.map(marketListingRow) });
+});
+
+// Owner: approve or reject a listing.
+app.post('/api/owner/market/listings/:id/approve', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const row = db.prepare('SELECT * FROM market_listings WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Listing not found.' });
+  if (row.status === 'approved') return res.status(409).json({ error: 'Already approved.' });
+  db.prepare(`UPDATE market_listings SET status = 'approved', rejection_reason = NULL WHERE id = ?`).run(id);
+  res.json({ ok: true, listing_id: id, status: 'approved' });
+});
+app.post('/api/owner/market/listings/:id/reject', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const row = db.prepare('SELECT * FROM market_listings WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Listing not found.' });
+  if (row.status === 'approved' || row.status === 'sold') return res.status(409).json({ error: 'Cannot reject — already approved.' });
+  db.prepare(`UPDATE market_listings SET status = 'rejected', rejection_reason = ? WHERE id = ?`)
+    .run(String((req.body || {}).reason || '').slice(0, 500), id);
+  res.json({ ok: true, listing_id: id, status: 'rejected' });
+});
+
+// Owner: all claimed orders.
+app.get('/api/owner/market/orders', requireRole('owner'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT o.*, l.title AS listing_title, l.price_cents, u.username AS buyer_name
+     FROM market_orders o
+     JOIN market_listings l ON l.id = o.listing_id
+     JOIN users u ON u.id = o.buyer_user_id
+     ORDER BY o.created_at DESC LIMIT 100`
+  ).all();
+  res.json({ ok: true, orders: rows });
+});
+
+// Owner: approve an order — writes the ledger (seller 90 / platform 10) and marks the listing sold.
+app.post('/api/owner/market/orders/:id/approve', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM market_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved.' });
+  if (order.status !== 'claimed') return res.status(409).json({ error: 'Buyer has not claimed payment yet.' });
+  const listing = db.prepare('SELECT * FROM market_listings WHERE id = ?').get(order.listing_id);
+  if (!listing || listing.status !== 'approved') return res.status(409).json({ error: 'Listing is no longer available.' });
+  const { developer, platform } = money.split(listing.price_cents);
+  const note = `Marketplace sale — buyer ${order.buyer_cashtag} → seller ${listing.seller_cashtag || ('user ' + listing.seller_user_id)}`;
+  const ledgerId = txn(db, () => {
+    const li = db.prepare(
+      `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+       VALUES ('purchase',NULL,?,?,?,?,?,?)`
+    ).run(order.buyer_user_id, listing.seller_user_id, listing.price_cents, platform, developer, note);
+    db.prepare(`UPDATE market_orders SET status = 'approved', ledger_id = ? WHERE id = ?`)
+      .run(li.lastInsertRowid, order.id);
+    db.prepare(`UPDATE market_listings SET status = 'sold' WHERE id = ?`).run(listing.id);
+    return li.lastInsertRowid;
+  });
+  res.json({ ok: true, order_id: order.id, ledger_id: Number(ledgerId) });
+});
+
+// Owner: reject an order.
+app.post('/api/owner/market/orders/:id/reject', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM market_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
+  db.prepare(`UPDATE market_orders SET status = 'rejected' WHERE id = ?`).run(id);
   res.json({ ok: true, order_id: id, status: 'rejected' });
 });
 

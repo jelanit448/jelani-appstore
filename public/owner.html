@@ -11,6 +11,8 @@
   <div id="demo"></div><div id="msg"></div>
   <div class="panel"><h2>Moderation queue</h2><div id="queue"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>Cash App orders</h2><div id="cashapp"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>Marketplace — listings to review</h2><div id="mqueue"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>Marketplace — claimed orders</h2><div id="morders"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>PayPal payments</h2>
     <p class="muted">Buyer checkout with PayPal. <a href="/paypal.html">Connect or switch sandbox/live →</a></p></div>
   <div class="panel"><h2>App prices</h2><div id="prices"><p class="muted">Loading…</p></div></div>
@@ -77,6 +79,42 @@ async function caMod(id, approve) {
   await api(`/api/owner/cashapp/orders/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
   loadCashapp(); loadFin();
 }
+async function loadMQueue() {
+  try {
+    const d = await api('/api/owner/market/pending');
+    document.getElementById('mqueue').innerHTML = d.pending.length ? d.pending.map(l => `
+      <div class="panel" style="margin:10px 0">
+        ${l.photo_url ? `<img src="${esc(l.photo_url)}" alt="" style="width:160px;border-radius:8px">` : ''}
+        <b>${esc(l.title)}</b> · ${esc(l.category)} · <b>$${(l.price_cents / 100).toFixed(2)}</b> · seller ${esc(l.seller_name)} (${esc(l.seller_cashtag || 'no cashtag')})
+        <br><span class="muted">${esc((l.description || '').slice(0, 250))}</span>
+        <div class="row" style="margin-top:8px"><button class="btn" onclick="mMod(${l.id},true)">Approve</button>
+        <button class="btn danger" onclick="mMod(${l.id},false)">Reject</button></div></div>`).join('')
+      : '<p class="muted">No marketplace listings waiting. 🎉</p>';
+  } catch (e) { document.getElementById('mqueue').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function mMod(id, approve) {
+  const body = approve ? {} : { reason: prompt('Rejection reason:') || '' };
+  await api(`/api/owner/market/listings/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body });
+  loadMQueue();
+}
+async function loadMOrders() {
+  try {
+    const d = await api('/api/owner/market/orders');
+    const open = d.orders.filter(o => o.status === 'claimed');
+    document.getElementById('morders').innerHTML = `
+      <p class="muted">Check the seller's $cashtag in Cash App for the payment, then approve. Approval writes the 90/10 ledger and marks the listing sold.</p>
+      ${open.length ? `<table><tr><th>Listing</th><th>Price</th><th>Buyer</th><th>Buyer's $cashtag</th><th></th></tr>` +
+        open.map(o => `<tr><td>${esc(o.listing_title)}</td><td>$${(o.price_cents / 100).toFixed(2)}</td>
+        <td>${esc(o.buyer_name)}</td><td>${esc(o.buyer_cashtag || '—')}</td>
+        <td><button class="btn" onclick="mOrderMod(${o.id},true)">Approve</button>
+        <button class="btn danger" onclick="mOrderMod(${o.id},false)">Reject</button></td></tr>`).join('') + `</table>`
+        : '<p class="muted">No claimed marketplace orders. 🎉</p>'}`;
+  } catch (e) { document.getElementById('morders').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function mOrderMod(id, approve) {
+  await api(`/api/owner/market/orders/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
+  loadMOrders(); loadFin();
+}
 async function loadPrices() {
   try {
     const d = await api('/api/owner/apps');
@@ -113,7 +151,7 @@ async function setPrice(id) {
   alert(`Price set to ${r.price}`);
   loadPrices();
 }
-(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadCashapp(); await loadPrices(); await loadFin(); })();
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadCashapp(); await loadMQueue(); await loadMOrders(); await loadPrices(); await loadFin(); })();
 </script>
 </body>
 </html>
