@@ -4,7 +4,7 @@
  *
  * Usage: STORE_OWNER_PASS='...' node moneylayer/unlock_prices.js
  *
- * Reads every batch*/manifest.json, sets unlock_price_cents=199 for the
+ * Reads every batch manifest.json, sets unlock_price_cents=199 for the
  * wave-1 apps (batches 1-10, which carry the in-app money layer) and 0 for
  * every other listing (their APKs don't have the unlock panel yet — selling
  * a code nobody can redeem would be dishonest; their wave sets 199 when
