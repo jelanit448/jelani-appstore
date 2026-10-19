@@ -22,7 +22,8 @@ async function main() {
   if (!pass) { console.error('STORE_OWNER_PASS env required'); process.exit(1); }
   const manifest = JSON.parse(fs.readFileSync(path.join(BATCH_DIR, 'manifest.json'), 'utf8'));
   const only = new Set(process.argv.slice(2));
-  const apps = (manifest.apps || []).filter((a) => !only.size || only.has(a.slug));
+  const manifestApps = Array.isArray(manifest) ? manifest : (manifest.apps || []);
+  const apps = manifestApps.filter((a) => !only.size || only.has(a.slug));
 
   const login = await fetch(BASE + '/api/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -4,6 +4,8 @@
  *
  * Usage: node moneylayer/inject.js batch1 [batch2 ...]
  *   or:  node moneylayer/inject.js --all-wave1   (batches 1..10)
+ * Map file: --map=wave2_codes.json (default wave1_codes.json).
+ * Manifests may be {apps:[...]} OR a bare list [...] — both are read.
  *
  * For each app in batchN/apps/<slug>/:
  *  - reads meta.json (needs .package and .name)
@@ -42,8 +44,9 @@ function injectBatch(batchDir, secret, waveMap) {
   const manifestPath = path.join(batchPath, 'manifest.json');
   if (!fs.existsSync(appsDir)) throw new Error(`no apps dir: ${appsDir}`);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const manifestApps = Array.isArray(manifest) ? manifest : (manifest.apps || []);
   const listingBySlug = {};
-  for (const a of manifest.apps || []) listingBySlug[a.slug] = a.listing_id;
+  for (const a of manifestApps) listingBySlug[a.slug] = a.listing_id;
 
   const template = fs.readFileSync(path.join(__dirname, 'moneylayer.js'), 'utf8');
   if (template.indexOf('%%ML_HASH%%') < 0) throw new Error('moneylayer.js template missing placeholders');
@@ -100,16 +103,19 @@ function injectBatch(batchDir, secret, waveMap) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  const mapArg = rawArgs.find((a) => a.startsWith('--map='));
+  const mapName = mapArg ? mapArg.slice('--map='.length) : 'wave1_codes.json';
+  const args = rawArgs.filter((a) => !a.startsWith('--map='));
   let batches = args;
   if (args.includes('--all-wave1')) batches = Array.from({ length: 10 }, (_, i) => `batch${i + 1}`);
   if (!batches.length) {
-    console.error('usage: node moneylayer/inject.js batch1 [batch2 ...] | --all-wave1');
+    console.error('usage: node moneylayer/inject.js batch1 [batch2 ...] | --all-wave1 [--map=waveN_codes.json]');
     process.exit(1);
   }
   const secret = getSecret();
   process.env.UNLOCK_CODE_SECRET = secret;
-  const waveMapPath = path.join(__dirname, 'wave1_codes.json');
+  const waveMapPath = path.join(__dirname, mapName);
   let waveMap = [];
   if (fs.existsSync(waveMapPath)) {
     try { waveMap = JSON.parse(fs.readFileSync(waveMapPath, 'utf8')).apps || []; } catch { waveMap = []; }
