@@ -1,1 +1,132 @@
-[{"icon":"/ai-line/ideaxray.png","name":"Idea X-Ray","need":"Without it, people burn real money on ideas they never tested — no score, no fixes, no warning before the first dollar.","price_line":"$8,000 · Single owner · Full source + docs","slug":"ideaxray","status":"Available","tesla":"The score path — 64 → 71 → 58 — watching your idea get more viable or stay a money trap. A quiz gives you a number; this watches your back for months.","what":"Paste any business idea; it grades it 0–100 across 8 real factors, tells you what's strong and what to fix before you spend, and tracks the idea's score trajectory as you learn."},{"icon":"/ai-line/dreamplanbuilder.png","name":"Dream Plan Builder","need":"Without it, big goals die — no plan, no weekly follow-through, and no idea what to actually do this week.","price_line":"$8,000 · Single owner · Full source + docs","slug":"dreamplanbuilder","status":"Available","tesla":"The This Week view — type your dream once, and every Sunday the app tells you exactly what this week means. Nobody ever made the one button that runs your whole goal.","what":"Type a big goal; get a dated step-by-step plan with phases, budget split, week-by-week actions, and 8 milestones with a live progress bar."},{"icon":"/ai-line/storyspark.png","name":"Story Spark","need":"Without it, parents face the bedtime-story panic every single night — an empty head, and a kid who hates repeats.","price_line":"$8,000 · Single owner · Full source + docs","slug":"storyspark","status":"Available","tesla":"A parent realizing they will never run out of bedtime stories again — fresh, personal, with a lesson, in 5 seconds, plus a library of favorites their kid asks for by name.","what":"Original multi-chapter bedtime stories in seconds — your kid as the hero, age-matched wording, your chosen lesson woven into the ending, never repeated."}]
+[
+ {
+  "icon": "/ai-line/ideaxray.png",
+  "name": "Idea X-Ray",
+  "need": "Without it, people burn real money on ideas they never tested — no score, no fixes, no warning before the first dollar.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "ideaxray",
+  "status": "Available",
+  "tesla": "The score path — 64 → 71 → 58 — watching your idea get more viable or stay a money trap. A quiz gives you a number; this watches your back for months.",
+  "what": "Paste any business idea; it grades it 0–100 across 8 real factors, tells you what's strong and what to fix before you spend, and tracks the idea's score trajectory as you learn."
+ },
+ {
+  "icon": "/ai-line/dreamplanbuilder.png",
+  "name": "Dream Plan Builder",
+  "need": "Without it, big goals die — no plan, no weekly follow-through, and no idea what to actually do this week.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "dreamplanbuilder",
+  "status": "Available",
+  "tesla": "The This Week view — type your dream once, and every Sunday the app tells you exactly what this week means. Nobody ever made the one button that runs your whole goal.",
+  "what": "Type a big goal; get a dated step-by-step plan with phases, budget split, week-by-week actions, and 8 milestones with a live progress bar."
+ },
+ {
+  "icon": "/ai-line/storyspark.png",
+  "name": "Story Spark",
+  "need": "Without it, parents face the bedtime-story panic every single night — an empty head, and a kid who hates repeats.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "storyspark",
+  "status": "Available",
+  "tesla": "A parent realizing they will never run out of bedtime stories again — fresh, personal, with a lesson, in 5 seconds, plus a library of favorites their kid asks for by name.",
+  "what": "Original multi-chapter bedtime stories in seconds — your kid as the hero, age-matched wording, your chosen lesson woven into the ending, never repeated."
+ },
+ {
+  "icon": "/ai-line/paycheckstretch.png",
+  "name": "Paycheck Stretch",
+  "need": "Without it, people run dry mid-cycle and eat overdraft fees.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "paycheckstretch",
+  "status": "Available",
+  "tesla": "The daily number heals itself — overspend today and tomorrow's number drops to absorb it, so one bad day never silently kills the cycle.",
+  "what": "Turns each paycheck into a day-by-day spending plan: bills first, savings set aside, the rest split across every day until payday — with overdraft warnings before they happen."
+ },
+ {
+  "icon": "/ai-line/billoracle.png",
+  "name": "Bill Oracle",
+  "need": "Surprise bill weeks are why people fall behind; this kills the surprise.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "billoracle",
+  "status": "Available",
+  "tesla": "It doesn't just show your bills — it names the week that's going to hurt and prices the danger away with one number.",
+  "what": "Enter your bills once; it forecasts six months ahead, flags the danger weeks, and gives you the exact amount to set aside before each one hits."
+ },
+ {
+  "icon": "/ai-line/eatitfirst.png",
+  "name": "Eat It First",
+  "need": "Families throw away roughly $1,500 of food a year because nobody tracks what's about to expire.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "eatitfirst",
+  "status": "Available",
+  "tesla": "Your fridge becomes a wallet — a personal scoreboard of dollars rescued vs dollars tossed, so saving food feels like making money.",
+  "what": "Fridge inventory with expiry tracking, a Cook Tonight urgency list, meal plans drafted from what you own, and a running score of money rescued vs wasted."
+ },
+ {
+  "icon": "/ai-line/usewhatyouhave.png",
+  "name": "Use What You Have",
+  "need": "Cooking stalls when people don't know what to do with what's already in the kitchen.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "usewhatyouhave",
+  "status": "Available",
+  "tesla": "Every cooking app starts from recipes you pick — this one starts from ingredients you already have and ranks the dinners by coverage.",
+  "what": "Type in what's in your kitchen and get real dinners ranked by how much of your exact pantry they use — a saved pantry feeds the engine every night."
+ },
+ {
+  "icon": "/ai-line/dayreset.png",
+  "name": "Day Reset",
+  "need": "Mornings get lost to deciding — the first hour of every day burns on choosing what to do first.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "dayreset",
+  "status": "Available",
+  "tesla": "Every planner makes you plan in the morning, foggy and behind — this closes the day at night, so you never decide before coffee.",
+  "what": "A 60-second nightly close-out: carry over what's left, set tomorrow's priorities, and wake up to a day that's already decided."
+ },
+ {
+  "icon": "/ai-line/todaycard.png",
+  "name": "Today Card",
+  "need": "Every morning asks the same three questions — what's due, what's left, what's next — and people open five apps to answer them.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "todaycard",
+  "status": "Available",
+  "tesla": "One card answers all three questions and picks the one thing to hit first — after that, the five-app morning looks ridiculous.",
+  "what": "One morning card: bills due today and this week, money left, and the single next move — all three answers on one screen."
+ },
+ {
+  "icon": "/ai-line/wearlog.png",
+  "name": "Wear Log",
+  "need": "Everyone decides what's dirty by the sniff test — a guess dressed up as a habit.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "wearlog",
+  "status": "Available",
+  "tesla": "The basket fills itself the moment a shirt hits its wear limit, and the forecast names laundry day before you run out of clean clothes.",
+  "what": "Tracks every garment by wear count, knows what's dirty without you remembering, and forecasts laundry day from your actual rotation."
+ },
+ {
+  "icon": "/ai-line/chorecourt.png",
+  "name": "Chore Court",
+  "need": "Chore fights are relationship fights — and they're unfixable because nobody can measure the unfairness.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "chorecourt",
+  "status": "Available",
+  "tesla": "Every chore gets a price tag — households balance budgets to the penny but split chores by vibes; this makes the split arithmetic, with the proof on screen.",
+  "what": "Set up your household once; the fairness engine prices every chore in effort points, assigns and auto-rotates them, and issues THE RULING when someone disputes the split."
+ },
+ {
+  "icon": "/ai-line/receiptbank.png",
+  "name": "Receipt Bank",
+  "need": "Money leaks out unnoticed — nobody overspends on one big thing; they slowly pay more for the same life.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "receiptbank",
+  "status": "Available",
+  "tesla": "Your bank app shows what you spent — this names the exact dollars leaking out as your costs creep up each month. Once you see that number, you can't unsee it.",
+  "what": "A creep detector, not an expense tracker: log receipts and it flags quietly rising costs with a Leak Index — the share of your spending that's pure price creep."
+ },
+ {
+  "icon": "/ai-line/pildiary.png",
+  "name": "Pill Diary",
+  "need": "Nobody can tell from memory at 8:12 PM whether the 8:00 dose went down.",
+  "price_line": "$8,000 · Single owner · Full source + docs",
+  "slug": "pildiary",
+  "status": "Available",
+  "tesla": "Every reminder app pretends it can remind you — this one does the honest thing instead, and turns your own log into analytics and a doctor-ready report.",
+  "what": "An honest medication diary — a diary, not an alarm: tap Taken or Skipped per dose, see today's status instantly, with 30/90-day adherence stats and copyable doctor-visit reports."
+ }
+]
