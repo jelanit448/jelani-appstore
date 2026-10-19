@@ -23,6 +23,15 @@
     var JUMP_V = -800;
     var PLAYER_W = 34, PLAYER_H = 56, PLAYER_X = 90;
     var BASE_SPEED = 265, MAX_SPEED = 660, RAMP = 9; // px/s gained per second
+
+    // ---- 100 LEVELS engine: XP from records + run score; higher levels start faster ----
+    if (window.Levels) {
+      Levels.init('eastsidedash', { label: 'East Side Dash' });
+      Levels.onLevel(function (lvl) {
+        // Natural difficulty knob: base speed climbs gently with level (+2.5/level, capped at +70).
+        BASE_SPEED = 265 + Math.min(70, (lvl - 1) * 2.5);
+      });
+    }
     var BEST_KEY = 'eastsidedash_best';
     var PACKS_KEY = 'eastsidedash_packs';
     var CASHTAG = '$JelaniThompson2';
@@ -358,6 +367,7 @@
         if (ddx * ddx + ddy * ddy < (rc.r + 24) * (rc.r + 24)) {
           G.records.splice(j, 1);
           G.score += G.night ? 20 : 10; // Nights pack: records worth double
+          if (window.Levels) { Levels.earn(10); } // record collected: +10 XP
           sfx('coin');
         }
       }
@@ -368,6 +378,7 @@
       sfx('crash');
       var s = Math.floor(G.score);
       if (s > G.best) { G.best = s; writeBest(s); }
+      if (window.Levels) { Levels.earn(Math.floor(G.score / 25)); } // run bonus: 1 XP per 25 score
     }
 
     // ---- input (guarded) ----
