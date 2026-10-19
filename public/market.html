@@ -12,11 +12,10 @@
   <div class="panel">
     <h2>🏷️ Marketplace</h2>
     <p class="muted">Buy and sell between real people. <b>Free to list. Free to browse. Free to claim.</b>
-    The only charge: <b>10% of a completed sale</b> goes to the platform — the seller keeps <b>90%</b>.</p>
+    Sellers get <b>100% of their asking price</b> — the buyer pays a <b>10% platform fee added on top</b>.</p>
     <p class="muted">Matches pair your listings with people <b>in this app</b> who said they're looking for that thing —
     plus share buttons on every listing so you can spread the word anywhere.</p>
-    <p class="muted">How a sale works: the buyer pays the seller's $cashtag in their own Cash App, claims the order,
-    and the owner approves after seeing the payment. Nothing sells itself — every listing and order is a real person's.</p>
+    <p class="muted">How a sale works: the buyer pays the asking price to the seller's $cashtag plus a 10% platform fee to $JelaniThompson2 in their own Cash App, claims the order, and the owner approves after seeing the payments. The seller always gets their full asking price. Nothing sells itself — every listing and order is a real person's.</p>
     <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
       <button class="btn" data-tab="browse">Browse</button>
       <button class="btn" data-tab="sell">Sell an item</button>
@@ -76,7 +75,7 @@ function listingCard(l) {
     ${l.photo_url ? `<img src="${esc(l.photo_url)}" alt="" style="width:100%;max-width:420px;border-radius:12px;border:1px solid #333">` : ''}
     <div style="margin-top:8px"><b><a href="/market.html?id=${l.id}" style="color:#d4af37">${esc(l.title)}</a></b> ${statusBadge(l.status)}</div>
     <div class="muted">${esc(l.category)} · sold by ${esc(l.seller_name)} · ${esc(l.created_at.slice(0, 10))}</div>
-    <div style="font-size:20px;margin:6px 0"><b>${fmt(l.price_cents)}</b></div>
+    <div style="font-size:20px;margin:6px 0"><b>${fmt(l.price_cents)}</b> <span class="muted" style="font-size:13px">+ 10% buyer fee</span></div>
     <p class="muted" style="white-space:pre-wrap">${esc((l.description || '').slice(0, 300))}</p>
     ${shareRow(url, text, l.title)}
   </div>`;
@@ -85,29 +84,33 @@ function listingCard(l) {
 function listingDetail(l) {
   const url = location.origin + '/market.html?id=' + l.id;
   const text = `For sale: ${l.title} — ${fmt(l.price_cents)} on Jelani\u2019s App Store marketplace: ${url}`;
+  const tag = String(l.seller_cashtag || '').replace(/'/g, '');
   return `<div class="panel">
     ${l.photo_url ? `<img src="${esc(l.photo_url)}" alt="" style="width:100%;max-width:520px;border-radius:12px;border:1px solid #333">` : ''}
     <h2>${esc(l.title)}</h2>
     <div>${statusBadge(l.status)}</div>
     <div class="muted">${esc(l.category)} · sold by ${esc(l.seller_name)} · ${esc(l.created_at.slice(0, 10))}</div>
     <div style="font-size:24px;margin:10px 0"><b>${fmt(l.price_cents)}</b></div>
+    <div class="muted" style="margin-bottom:10px">Asking price ${fmt(l.price_cents)} + 10% platform fee ${fmt(l.fee_cents)} = buyer pays <b>${fmt(l.total_cents)}</b> total. The seller gets the full asking price.</div>
     <p style="white-space:pre-wrap">${esc(l.description || '')}</p>
     <div class="muted">Seller $cashtag: ${esc(l.seller_cashtag || 'ask the seller')}</div>
-    ${l.status === 'approved' ? `<div class="row" style="margin-top:12px"><button class="btn" style="background:#00d632;color:#111" onclick="claim(${l.id})">Buy — claim this item</button></div><div id="claimmsg" class="muted" style="margin-top:6px"></div>` : ''}
+    ${l.status === 'approved' ? `<div class="row" style="margin-top:12px"><button class="btn" style="background:#00d632;color:#111" onclick="claim(${l.id},${l.price_cents},${l.fee_cents},${l.total_cents},'${tag}')">Buy — claim this item</button></div><div id="claimmsg" class="muted" style="margin-top:6px"></div>` : ''}
     ${shareRow(url, text, l.title)}
     <div style="margin-top:12px"><a href="/market.html">← back to browse</a></div>
   </div>`;
 }
 
-async function claim(id) {
+async function claim(id, priceC, feeC, totalC, sellerTag) {
   const u = await me().catch(() => null);
   if (!u) { location.href = '/login.html?next=' + encodeURIComponent('/market.html?id=' + id); return; }
-  const cashtag = prompt('Your Cash App $cashtag (for the seller to confirm payment):');
+  const ok = confirm(`Price ${fmt(priceC)} + 10% platform fee ${fmt(feeC)} = ${fmt(totalC)} total.\n\nIn your Cash App: send ${fmt(priceC)} to ${sellerTag || 'the seller'} and ${fmt(feeC)} to $JelaniThompson2.`);
+  if (!ok) return;
+  const cashtag = prompt('Your Cash App $cashtag (so the payments can be confirmed):');
   if (!cashtag) return;
   const msg = $('claimmsg');
   try {
     const r = await api('/api/market/orders', { method: 'POST', body: { listing_id: id, buyer_cashtag: cashtag } });
-    msg.innerHTML = `<div class="okmsg">✅ ${esc(r.message)}<br>The seller keeps 90%, 10% goes to the platform.</div>`;
+    msg.innerHTML = `<div class="okmsg">✅ Claimed! Price ${fmt(r.price_cents)} + fee ${fmt(r.fee_cents)} = ${fmt(r.total_cents)} total.<br>${esc(r.message)}<br>The seller gets the full ${fmt(r.price_cents)} — the 10% fee goes to the platform.</div>`;
   } catch (e) { msg.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
@@ -156,7 +159,7 @@ function sellView() {
     <label class="muted">Description</label><textarea class="f" id="s_desc" rows="4" maxlength="2000" placeholder="Condition, what's included, pickup/delivery…"></textarea>
     <label class="muted">Photo (optional)</label><input type="file" id="s_photo" accept="image/*">
     <div class="row" style="margin-top:12px"><button class="btn" id="s_go">List it — free</button></div>
-    <p class="muted" style="margin-top:8px">Goes to the owner for approval before it shows up. When it sells: you keep 90%, the platform takes 10%.</p>
+    <p class="muted" style="margin-top:8px">Goes to the owner for approval before it shows up. When it sells: you keep 100% of your asking price — the buyer pays the 10% platform fee on top.</p>
   </div>`;
   $('s_go').onclick = async () => {
     const msg = $('sellmsg');

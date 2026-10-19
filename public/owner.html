@@ -56,7 +56,7 @@ async function loadFin() {
       ${f.perDeveloper.length ? `<table><tr><th>Developer</th><th>Owed</th></tr>` + f.perDeveloper.map(p => `<tr><td>${esc(p.developer)}</td><td><b>${fmt(p.owed_cents)}</b></td></tr>`).join('') + `</table>` : '<p class="muted">Nothing owed.</p>'}
       <h3>Reconciliation check</h3>
       ${f.reconciliation.ok
-        ? `<div class="okmsg">✅ ${f.reconciliation.checked} ledger row(s) checked — every fee matches the 90/10 split. No missing fees.</div>`
+        ? `<div class="okmsg">✅ ${f.reconciliation.checked} ledger row(s) checked — every fee matches the store's money rules (90/10 on app sales, 10%-on-top on marketplace sales). No missing fees.</div>`
         : `<div class="err">❌ ${f.reconciliation.mismatches.length} problem(s):<br>` + f.reconciliation.mismatches.map(m => `#${m.ledger_id} (${esc(m.type)}): ${esc(m.problem)}`).join('<br>') + `</div>`}
       <p class="muted">Stripe connected: ${f.stripeConfigured ? 'yes' : 'no — demo mode'}. ${esc(f.demoBanner)}</p>`;
   } catch (e) { document.getElementById('fin').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -102,12 +102,14 @@ async function loadMOrders() {
     const d = await api('/api/owner/market/orders');
     const open = d.orders.filter(o => o.status === 'claimed');
     document.getElementById('morders').innerHTML = `
-      <p class="muted">Check the seller's $cashtag in Cash App for the payment, then approve. Approval writes the 90/10 ledger and marks the listing sold.</p>
-      ${open.length ? `<table><tr><th>Listing</th><th>Price</th><th>Buyer</th><th>Buyer's $cashtag</th><th></th></tr>` +
-        open.map(o => `<tr><td>${esc(o.listing_title)}</td><td>$${(o.price_cents / 100).toFixed(2)}</td>
+      <p class="muted">Check both payments in Cash App — the asking price on the seller's $cashtag and the 10% fee on $JelaniThompson2 — then approve. Approval writes the ledger (seller gets 100% of the price, platform keeps the 10% fee) and marks the listing sold.</p>
+      ${open.length ? `<table><tr><th>Listing</th><th>Price</th><th>Fee (10%)</th><th>Total</th><th>Buyer</th><th>Buyer's $cashtag</th><th></th></tr>` +
+        open.map(o => {
+          const p = o.price_cents || 0, f = o.fee_cents || 0, t = o.total_cents || 0;
+          return `<tr><td>${esc(o.listing_title)}</td><td>$${(p / 100).toFixed(2)}</td><td>$${(f / 100).toFixed(2)}</td><td><b>$${(t / 100).toFixed(2)}</b></td>
         <td>${esc(o.buyer_name)}</td><td>${esc(o.buyer_cashtag || '—')}</td>
         <td><button class="btn" onclick="mOrderMod(${o.id},true)">Approve</button>
-        <button class="btn danger" onclick="mOrderMod(${o.id},false)">Reject</button></td></tr>`).join('') + `</table>`
+        <button class="btn danger" onclick="mOrderMod(${o.id},false)">Reject</button></td></tr>`; }).join('') + `</table>`
         : '<p class="muted">No claimed marketplace orders. 🎉</p>'}`;
   } catch (e) { document.getElementById('morders').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }

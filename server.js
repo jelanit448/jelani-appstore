@@ -885,9 +885,11 @@ app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res
 // money: Marketplace — buy & sell between users (free to list, 10% on sale)
 // ---------------------------------------------------------------------------
 // Free to list, free to browse, free to claim. The ONLY platform charge is
-// 10% of a completed sale: buyer pays the seller's $cashtag in their own
-// Cash App, claims the order, and the owner approves after seeing the
-// payment. Approval writes the ledger row (seller 90 / platform 10) and
+// a 10% fee the BUYER pays ON TOP of the seller's asking price — the seller
+// gets 100% of what they asked. The buyer pays the seller's $cashtag for the
+// price plus $JelaniThompson2 for the fee in their own Cash App, claims the
+// order, and the owner approves after seeing the payments. Approval writes
+// the ledger row (buyer's total / platform fee / seller's full price) and
 // marks the listing sold. Nothing here is seeded — every listing, want and
 // order is a real user action.
 
@@ -901,6 +903,11 @@ function marketListingRow(row) {
   if (!row) return null;
   const { ...rest } = row;
   rest.photo_url = row.photo_path ? `/api/market/photos/${row.id}` : null;
+  // Buyer-facing price breakdown: seller's asking price, the 10% platform
+  // fee added on top, and the buyer's total.
+  const t = money.marketplaceTotals(row.price_cents || 0);
+  rest.fee_cents = t.fee;
+  rest.total_cents = t.total;
   return rest;
 }
 
@@ -1092,8 +1099,11 @@ function matchReason(m) {
   return parts.join(' · ') || 'weak match';
 }
 
-// Buyer claims a purchase: pays the seller's $cashtag in their own Cash App,
-// then records their $cashtag as proof. Owner approves after seeing payment.
+// Buyer claims a purchase. Pricing is snapshotted on the order: the seller
+// gets 100% of the asking price, and the buyer pays a 10% platform fee ON TOP.
+// The buyer sends the price to the seller's $cashtag and the fee to
+// $JelaniThompson2 in their own Cash App, then records their $cashtag as
+// proof. Owner approves after seeing the payments.
 app.post('/api/market/orders', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
   const listingId = toId((req.body || {}).listing_id);
   const cashtag = String((req.body || {}).buyer_cashtag || '').trim();
@@ -1107,13 +1117,15 @@ app.post('/api/market/orders', requireAuth, rateLimit({ windowMs: 3600_000, max:
     `SELECT id FROM market_orders WHERE listing_id = ? AND buyer_user_id = ? AND status IN ('claimed','approved')`
   ).get(listing.id, req.user.id);
   if (existing) return res.status(409).json({ error: 'You already have an order for this listing.' });
+  const t = money.marketplaceTotals(listing.price_cents);
   const info = db.prepare(
-    `INSERT INTO market_orders (listing_id, buyer_user_id, buyer_cashtag, status)
-     VALUES (?,?,?,'claimed')`
-  ).run(listing.id, req.user.id, cashtag);
+    `INSERT INTO market_orders (listing_id, buyer_user_id, buyer_cashtag, price_cents, fee_cents, total_cents, status)
+     VALUES (?,?,?,?,?,?,'claimed')`
+  ).run(listing.id, req.user.id, cashtag, t.price, t.fee, t.total);
   res.json({
     ok: true, order_id: Number(info.lastInsertRowid), status: 'claimed',
-    message: `Pay ${money.formatUsd(listing.price_cents)} to ${listing.seller_cashtag || 'the seller'} in your Cash App, then wait for the owner to approve.`,
+    price_cents: t.price, fee_cents: t.fee, total_cents: t.total,
+    message: `Price ${money.formatUsd(t.price)} + 10% platform fee ${money.formatUsd(t.fee)} = total ${money.formatUsd(t.total)}. In your Cash App: send ${money.formatUsd(t.price)} to ${listing.seller_cashtag || 'the seller'} and ${money.formatUsd(t.fee)} to $JelaniThompson2, then wait for the owner to approve.`,
   });
 });
 
@@ -1157,7 +1169,8 @@ app.get('/api/owner/market/orders', requireRole('owner'), (req, res) => {
   res.json({ ok: true, orders: rows });
 });
 
-// Owner: approve an order — writes the ledger (seller 90 / platform 10) and marks the listing sold.
+// Owner: approve an order — writes the ledger (seller gets the FULL price,
+// platform keeps the 10% fee the buyer paid on top) and marks the listing sold.
 app.post('/api/owner/market/orders/:id/approve', requireRole('owner'), (req, res) => {
   const id = toId(req.params.id);
   const order = db.prepare('SELECT * FROM market_orders WHERE id = ?').get(id);
@@ -1166,13 +1179,17 @@ app.post('/api/owner/market/orders/:id/approve', requireRole('owner'), (req, res
   if (order.status !== 'claimed') return res.status(409).json({ error: 'Buyer has not claimed payment yet.' });
   const listing = db.prepare('SELECT * FROM market_listings WHERE id = ?').get(order.listing_id);
   if (!listing || listing.status !== 'approved') return res.status(409).json({ error: 'Listing is no longer available.' });
-  const { developer, platform } = money.split(listing.price_cents);
-  const note = `Marketplace sale — buyer ${order.buyer_cashtag} → seller ${listing.seller_cashtag || ('user ' + listing.seller_user_id)}`;
+  // Pricing snapshot from the claim; recompute as a fallback for orders
+  // created before the snapshot columns existed.
+  const t = money.marketplaceTotals(order.price_cents || listing.price_cents);
+  const fee = order.fee_cents || t.fee;
+  const total = order.total_cents || t.total;
+  const note = `Marketplace sale — buyer ${order.buyer_cashtag} paid ${money.formatUsd(t.price)} to seller ${listing.seller_cashtag || ('user ' + listing.seller_user_id)} + ${money.formatUsd(fee)} fee`;
   const ledgerId = txn(db, () => {
     const li = db.prepare(
-      `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
-       VALUES ('purchase',NULL,?,?,?,?,?,?)`
-    ).run(order.buyer_user_id, listing.seller_user_id, listing.price_cents, platform, developer, note);
+      `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note, source)
+       VALUES ('purchase',NULL,?,?,?,?,?,?,'marketplace')`
+    ).run(order.buyer_user_id, listing.seller_user_id, total, fee, t.price, note);
     db.prepare(`UPDATE market_orders SET status = 'approved', ledger_id = ? WHERE id = ?`)
       .run(li.lastInsertRowid, order.id);
     db.prepare(`UPDATE market_listings SET status = 'sold' WHERE id = ?`).run(listing.id);
@@ -1529,7 +1546,9 @@ app.get('/api/owner/finance', requireRole('owner'), (req, res) => {
   ).all();
 
   // Reconciliation: EVERY ledger row must satisfy the single money definition.
-  const rows = db.prepare('SELECT id, type, gross_cents, fee_cents, net_cents FROM ledger').all();
+  // Marketplace rows (source='marketplace') are validated with the add-on
+  // model instead of the classic 90/10 split — see lib/money.js.
+  const rows = db.prepare('SELECT id, type, source, gross_cents, fee_cents, net_cents FROM ledger').all();
   const mismatches = [];
   for (const r of rows) {
     const problem = money.validateLedgerRow(r);
