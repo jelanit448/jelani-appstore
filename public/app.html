@@ -52,6 +52,7 @@ async function load() {
     </div>
     <div id="payinfo" class="muted" style="margin-top:8px"></div>
     <div id="cainfo" style="margin-top:8px"></div>
+    <div id="unlockbox" style="margin-top:10px"></div>
     </div>`;
   const dl = document.getElementById('dl');
   if (dl) dl.onclick = () => { location.href = '/api/apps/' + id + '/download'; setTimeout(load, 1500); };
@@ -192,6 +193,74 @@ async function load() {
     } catch (e) { /* PayPal stays hidden when unavailable */ }
   }
   renderPayPalBtn();
+  renderUnlockBox(a);
+  // ---- Full-version unlock (free-demo model) ----
+  // The download above is the FREE DEMO. The unlock code removes the demo
+  // limits inside the app forever. Same Cash App claim flow as everything else.
+  async function renderUnlockBox(a) {
+    const box = document.getElementById('unlockbox');
+    if (!box) return;
+    if (!(a.unlock_price_cents > 0)) return;
+    const price = '$' + (a.unlock_price_cents / 100).toFixed(2);
+    const u = await me().catch(() => null);
+    if (!u) {
+      box.innerHTML = `<div class="card" style="border:1px solid #d4af37"><b>🎁 FREE DEMO</b> — the download above is the full demo, free forever.<br>
+        <b style="color:#d4af37">FULL VERSION ${esc(price)}</b> — one unlock code removes the demo limits in the app, forever.<br>
+        <span class="muted"><a href="/login.html?next=${encodeURIComponent('/app.html?id=' + a.id)}">Sign in</a> to buy the unlock code.</span></div>`;
+      return;
+    }
+    if (a.unlock_owned) {
+      let codeHtml = '<span class="muted">Loading your code…</span>';
+      box.innerHTML = `<div class="card" style="border:1px solid #00d632"><b>✅ FULL VERSION UNLOCKED</b><br>${codeHtml}
+        <br><span class="muted">Open the app → tap the gold bar → Unlock → type this code.</span></div>`;
+      try {
+        const r = await api('/api/apps/' + a.id + '/unlock-code');
+        box.querySelector('.card').innerHTML = `<b>✅ FULL VERSION UNLOCKED</b><br>
+          Your unlock code: <b style="font-size:20px;letter-spacing:1px">${esc(r.code)}</b>
+          <button class="btn" id="copycode" style="margin-left:8px">📋 Copy</button>
+          <br><span class="muted">Open the app → tap the gold bar → Unlock → type this code. Keep it — it's yours forever.</span>`;
+        const cp = document.getElementById('copycode');
+        if (cp) cp.onclick = () => {
+          const done = () => { cp.textContent = '✅ Copied'; };
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.code).then(done, done);
+          else done();
+        };
+      } catch (e) {
+        box.querySelector('.card').innerHTML = `<b>✅ FULL VERSION UNLOCKED</b><br><span class="err">${esc(e.message)}</span>`;
+      }
+      return;
+    }
+    box.innerHTML = `<div class="card" style="border:1px solid #d4af37"><b>🎁 FREE DEMO</b> — the download above is the full demo, free forever.<br>
+      <b style="color:#d4af37">FULL VERSION ${esc(price)}</b> — one unlock code removes the demo limits in the app, forever.
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="btn" id="unlock_go" style="background:#d4af37;color:#111">🔓 Get the full version</button>
+      </div>
+      <div id="unlock_msg" class="muted" style="margin-top:8px"></div></div>`;
+    document.getElementById('unlock_go').onclick = () => {
+      const msg = document.getElementById('unlock_msg');
+      msg.innerHTML = `<p>1. Open Cash App and send <b>${esc(price)}</b> to <b>$JelaniThompson2</b><br>
+        2. Enter <b>your</b> $cashtag so we can match your payment:</p>
+        <input class="f" id="unlock_tag" placeholder="$yourcashtag" maxlength="21" style="max-width:240px">
+        <button class="btn" id="unlock_claim" style="background:#00d632">I've sent the payment</button>
+        <div class="muted" id="unlock_status" style="margin-top:6px"></div>`;
+      document.getElementById('unlock_claim').onclick = async () => {
+        const st = document.getElementById('unlock_status');
+        const tag = document.getElementById('unlock_tag').value.trim();
+        st.textContent = 'Claiming…';
+        try {
+          const r = await api('/api/apps/' + a.id + '/unlock-order', { method: 'POST', body: { buyer_cashtag: tag } });
+          st.innerHTML = '<span class="okmsg">✅ ' + esc(r.message || 'Claimed!') + '</span><br><span class="muted">Waiting for owner approval — your code appears here automatically.</span>';
+          const poll = setInterval(async () => {
+            try {
+              const c = await api('/api/apps/' + a.id + '/unlock-code');
+              clearInterval(poll);
+              renderUnlockBox(a);
+            } catch (e) { /* still waiting */ }
+          }, 12000);
+        } catch (e) { st.innerHTML = ''; showErr(st, e.message); }
+      };
+    };
+  }
   document.getElementById('reviews').innerHTML = d.reviews.length
     ? d.reviews.map(r => `<p><b>${esc(r.username)}</b> <span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span><br>${esc(r.text)}<br><span class="muted">${esc(r.created_at)}</span></p>`).join('')
     : '<p class="muted">No reviews yet — be the first.</p>';

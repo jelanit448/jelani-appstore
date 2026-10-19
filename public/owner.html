@@ -13,6 +13,7 @@
   <div class="panel"><h2>Cash App orders</h2><div id="cashapp"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>Marketplace — listings to review</h2><div id="mqueue"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>Marketplace — claimed orders</h2><div id="morders"><p class="muted">Loading…</p></div></div>
+  <div class="panel"><h2>Unlock orders — full-version codes</h2><div id="uorders"><p class="muted">Loading…</p></div></div>
   <div class="panel"><h2>PayPal payments</h2>
     <p class="muted">Buyer checkout with PayPal. <a href="/paypal.html">Connect or switch sandbox/live →</a></p></div>
   <div class="panel"><h2>App prices</h2><div id="prices"><p class="muted">Loading…</p></div></div>
@@ -117,6 +118,24 @@ async function mOrderMod(id, approve) {
   await api(`/api/owner/market/orders/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
   loadMOrders(); loadFin();
 }
+async function loadUOrders() {
+  try {
+    const d = await api('/api/owner/unlock/orders');
+    const open = d.orders.filter(o => o.status === 'claimed');
+    document.getElementById('uorders').innerHTML = `
+      <p class="muted">Check each payment on <b>${esc(d.cashtag)}</b> in Cash App, then approve. Approval writes the 90/10 ledger row and the buyer's unlock code becomes readable on the app page.</p>
+      ${open.length ? `<table><tr><th>App</th><th>Amount</th><th>Buyer</th><th>Buyer's $cashtag</th><th></th></tr>` +
+        open.map(o => `<tr><td>${esc(o.app_name)}</td><td><b>$${(o.amount_cents / 100).toFixed(2)}</b></td>
+        <td>${esc(o.buyer_name)}</td><td>${esc(o.buyer_cashtag || '—')}</td>
+        <td><button class="btn" onclick="uOrderMod(${o.id},true)">Approve</button>
+        <button class="btn danger" onclick="uOrderMod(${o.id},false)">Reject</button></td></tr>`).join('') + `</table>`
+        : '<p class="muted">No claimed unlock orders. 🎉</p>'}`;
+  } catch (e) { document.getElementById('uorders').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function uOrderMod(id, approve) {
+  await api(`/api/owner/unlock/orders/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
+  loadUOrders(); loadFin();
+}
 async function loadPrices() {
   try {
     const d = await api('/api/owner/apps');
@@ -153,7 +172,7 @@ async function setPrice(id) {
   alert(`Price set to ${r.price}`);
   loadPrices();
 }
-(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadCashapp(); await loadMQueue(); await loadMOrders(); await loadPrices(); await loadFin(); })();
+(async () => { await renderHeader(); document.getElementById('demo').innerHTML = demoBanner(); await loadQueue(); await loadCashapp(); await loadMQueue(); await loadMOrders(); await loadUOrders(); await loadPrices(); await loadFin(); })();
 </script>
 </body>
 </html>

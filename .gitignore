@@ -5,3 +5,8 @@ data/tmp/
 uploads/*
 !uploads/.gitkeep
 .DS_Store
+
+# Unlock-code secrets + code maps (NEVER commit)
+moneylayer/.secret
+moneylayer/*_codes.json
+moneylayer/wave*.json

@@ -26,6 +26,7 @@ const bcrypt = require('bcryptjs');
 
 const { initDb, txn, TERMS_VERSION } = require('./lib/db');
 const money = require('./lib/money');
+const unlock = require('./lib/unlock');
 const stripe = require('./lib/stripe');
 const paypal = require('./lib/paypal');
 
@@ -314,9 +315,16 @@ app.get('/api/apps/:id', (req, res) => {
       'SELECT id FROM purchases WHERE app_id = ? AND buyer_id = ?'
     ).get(appRow.id, req.user.id);
   }
-  const { file_path, ...safe } = appRow; // never leak server paths
+  // never leak server paths or the unlock-code hash
+  const { file_path, unlock_code_hash, ...safe } = appRow;
+  let unlock_owned = false;
+  if (req.user && appRow.unlock_price_cents > 0) {
+    unlock_owned = !!db.prepare(
+      `SELECT id FROM unlock_orders WHERE app_id = ? AND buyer_id = ? AND status = 'approved'`
+    ).get(appRow.id, req.user.id);
+  }
   res.json({
-    app: { ...safe, avg_rating: avg.avg, review_count: avg.n, owned, is_owner: !!isOwner },
+    app: { ...safe, avg_rating: avg.avg, review_count: avg.n, owned, is_owner: !!isOwner, unlock_owned },
     screenshots: shots.map((s) => `/api/screenshots/${s.id}`),
     reviews,
     demoBanner: money.DEMO_BANNER,
@@ -596,6 +604,22 @@ app.post('/api/upload/complete', requireAuth, (req, res) => {
   );
   const appId = info.lastInsertRowid;
 
+  // Free-demo model: derive this app's unlock-code hash from its APK package
+  // name right away, so the money layer baked into the APK matches the store.
+  // Never allowed to break an upload — failures just leave the hash for the
+  // owner to set via /api/owner/apps/:id/unlock-price.
+  try {
+    const tool = aapt2Path();
+    const pkg = tool ? unlock.packageNameFromApk(finalPath, tool) : null;
+    if (pkg) {
+      const hash = unlock.codeHash(unlock.deriveCode(pkg));
+      db.prepare('UPDATE apps SET unlock_price_cents = ?, unlock_code_hash = ? WHERE id = ?')
+        .run(199, hash, appId);
+    }
+  } catch (e) {
+    console.error('[upload] unlock hash derive failed:', e.message);
+  }
+
   // Optional screenshots (each itself a completed chunked upload).
   for (const sid of screenshot_upload_ids || []) {
     const sm = readMeta(sid);
@@ -783,6 +807,41 @@ function cashappAppCheck(appId, buyerId) {
 
 const CASHTAG_RE = /^\$[A-Za-z0-9_]{1,20}$/;
 
+// ---- Full-version unlock codes (free-demo model) ----
+// The Android package name of a listing's APK, via aapt2 dump badging.
+// Used as the stable per-app identity for unlock-code derivation.
+let _aapt2Path = null;
+let _aapt2Tried = false;
+function aapt2Path() {
+  if (_aapt2Tried) return _aapt2Path;
+  _aapt2Tried = true;
+  try {
+    const appmaker = require('./lib/appmaker');
+    const sdk = appmaker.findSdk(path.join(__dirname, 'data'));
+    if (sdk && sdk.bt) _aapt2Path = path.join(sdk.bt, 'aapt2');
+  } catch (e) {
+    console.error('[unlock] aapt2 lookup failed:', e.message);
+  }
+  return _aapt2Path;
+}
+function appPackageName(appRow) {
+  const tool = aapt2Path();
+  if (!tool || !appRow || !appRow.file_path) return null;
+  return unlock.packageNameFromApk(appRow.file_path, tool);
+}
+// Derive + store the unlock hash for a listing. Returns {package, code, hash}
+// or {error}. The plaintext code is returned to the caller once (for the
+// wave code maps) and never persisted.
+function setupAppUnlock(appRow, priceCents) {
+  const pkg = appPackageName(appRow);
+  if (!pkg) return { error: 'Could not read the package name from this listing\u2019s APK.' };
+  const code = unlock.deriveCode(pkg);
+  const hash = unlock.codeHash(code);
+  db.prepare('UPDATE apps SET unlock_price_cents = ?, unlock_code_hash = ? WHERE id = ?')
+    .run(priceCents, hash, appRow.id);
+  return { package: pkg, code, hash };
+}
+
 // Start a Cash App order: returns what to pay and where.
 app.post('/api/purchase/cashapp/init', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
   const appId = toId((req.body || {}).app_id);
@@ -879,6 +938,137 @@ app.post('/api/owner/cashapp/orders/:id/reject', requireRole('owner'), (req, res
   if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
   db.prepare(`UPDATE cashapp_orders SET status = 'rejected' WHERE id = ?`).run(id);
   res.json({ ok: true, order_id: id, status: 'rejected' });
+});
+
+// ---------------------------------------------------------------------------
+// money: Full-version unlock codes (free-demo model).
+// The download is the FREE DEMO; the unlock code (per-app, bought through the
+// store's Cash App claim flow) removes the demo limits in the app forever.
+// Buyer pays the owner's $cashtag in their own Cash App, claims with their
+// $cashtag; the owner approves after seeing the payment. The ledger row is
+// written only on approval (classic 90/10: developer 90 / platform 10).
+// The plaintext code is NEVER stored — it is derived deterministically from
+// the app's package name, and only the SHA-256 hash lives in the DB.
+// ---------------------------------------------------------------------------
+
+// Buyer claims an unlock: validates + records their $cashtag as proof.
+app.post('/api/apps/:id/unlock-order', requireAuth, rateLimit({ windowMs: 3600_000, max: 20 }), (req, res) => {
+  const id = toId(req.params.id);
+  if (!id) return res.status(404).json({ error: 'App not found.' });
+  const appRow = q.appById.get(id);
+  if (!appRow || appRow.status !== 'approved') return res.status(404).json({ error: 'App not found.' });
+  if (!(appRow.unlock_price_cents > 0)) {
+    return res.status(400).json({ error: 'This app has no paid unlock — the free download is the whole thing.' });
+  }
+  if (appRow.developer_id === req.user.id) {
+    return res.status(400).json({ error: 'This is your app — you already have the full version.' });
+  }
+  const cashtag = String(((req.body || {}).buyer_cashtag) || '').trim();
+  if (!CASHTAG_RE.test(cashtag)) {
+    return res.status(400).json({ error: 'Enter your Cash App $cashtag (starts with $, letters/numbers only).' });
+  }
+  const existing = db.prepare(
+    `SELECT * FROM unlock_orders WHERE app_id = ? AND buyer_id = ? AND status IN ('pending','claimed','approved')`
+  ).get(appRow.id, req.user.id);
+  if (existing) {
+    return res.json({
+      ok: true, order_id: existing.id, status: existing.status,
+      cashtag: CASHAPP_CASHTAG, amount_cents: existing.amount_cents,
+      amount: money.formatUsd(existing.amount_cents), resumed: true,
+    });
+  }
+  const info = db.prepare(
+    `INSERT INTO unlock_orders (app_id, buyer_id, amount_cents, buyer_cashtag, status)
+     VALUES (?,?,?,?,'claimed')`
+  ).run(appRow.id, req.user.id, appRow.unlock_price_cents, cashtag);
+  res.json({
+    ok: true, order_id: Number(info.lastInsertRowid), status: 'claimed',
+    cashtag: CASHAPP_CASHTAG, amount_cents: appRow.unlock_price_cents,
+    amount: money.formatUsd(appRow.unlock_price_cents),
+    message: 'Claimed! Send the payment in Cash App, then the owner approves and your unlock code appears here.',
+  });
+});
+
+// Buyer's unlock code — ONLY for buyers with an APPROVED unlock order.
+app.get('/api/apps/:id/unlock-code', requireAuth, (req, res) => {
+  const id = toId(req.params.id);
+  if (!id) return res.status(404).json({ error: 'App not found.' });
+  const appRow = q.appById.get(id);
+  if (!appRow || appRow.status !== 'approved') return res.status(404).json({ error: 'App not found.' });
+  const order = db.prepare(
+    `SELECT id FROM unlock_orders WHERE app_id = ? AND buyer_id = ? AND status = 'approved'`
+  ).get(appRow.id, req.user.id);
+  if (!order) return res.status(403).json({ error: 'No approved unlock for this app yet.' });
+  const pkg = appPackageName(appRow);
+  if (!pkg) return res.status(500).json({ error: 'Could not read this listing\u2019s package. The owner has been notified.' });
+  res.json({ ok: true, code: unlock.deriveCode(pkg) });
+});
+
+// Owner: list unlock orders (newest first).
+app.get('/api/owner/unlock/orders', requireRole('owner'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT o.*, a.name AS app_name, u.username AS buyer_name
+     FROM unlock_orders o
+     JOIN apps a ON a.id = o.app_id
+     JOIN users u ON u.id = o.buyer_id
+     ORDER BY o.created_at DESC LIMIT 100`
+  ).all();
+  res.json({ ok: true, orders: rows, cashtag: CASHAPP_CASHTAG });
+});
+
+// Owner: approve a claimed unlock order — writes the 90/10 ledger row.
+app.post('/api/owner/unlock/orders/:id/approve', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM unlock_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved.' });
+  if (order.status !== 'claimed') {
+    return res.status(409).json({ error: 'Buyer has not claimed payment yet.' });
+  }
+  const appRow = q.appById.get(order.app_id);
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  const { developer, platform } = money.split(order.amount_cents);
+  const note = `Unlock code — Cash App manual — buyer ${order.buyer_cashtag} → ${CASHAPP_CASHTAG}`;
+  const ledgerId = txn(db, () => {
+    const li = db.prepare(
+      `INSERT INTO ledger (type, app_id, buyer_id, developer_id, gross_cents, fee_cents, net_cents, note)
+       VALUES ('purchase',?,?,?,?,?,?,?)`
+    ).run(order.app_id, order.buyer_id, appRow.developer_id, order.amount_cents, platform, developer, note);
+    db.prepare(`UPDATE unlock_orders SET status = 'approved', ledger_id = ? WHERE id = ?`)
+      .run(li.lastInsertRowid, order.id);
+    return li.lastInsertRowid;
+  });
+  res.json({ ok: true, order_id: order.id, ledger_id: Number(ledgerId) });
+});
+
+// Owner: reject an unlock order (no ledger row written).
+app.post('/api/owner/unlock/orders/:id/reject', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const order = db.prepare('SELECT * FROM unlock_orders WHERE id = ?').get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Already approved — issue a refund instead.' });
+  db.prepare(`UPDATE unlock_orders SET status = 'rejected' WHERE id = ?`).run(id);
+  res.json({ ok: true, order_id: id, status: 'rejected' });
+});
+
+// Owner: set an app's unlock price AND (re)derive its unlock-code hash from
+// the listing's APK package name. One call readies a listing for the demo
+// model: pass {unlock_price_cents: 199}. Pass 0 to turn the unlock off.
+app.post('/api/owner/apps/:id/unlock-price', requireRole('owner'), (req, res) => {
+  const id = toId(req.params.id);
+  const cents = Number(((req.body || {}).unlock_price_cents));
+  if (!Number.isInteger(cents) || cents < 0 || cents > 1000000) {
+    return res.status(400).json({ error: 'unlock_price_cents must be 0–1000000.' });
+  }
+  const appRow = q.appById.get(id);
+  if (!appRow) return res.status(404).json({ error: 'App not found.' });
+  if (cents === 0) {
+    db.prepare('UPDATE apps SET unlock_price_cents = 0, unlock_code_hash = NULL WHERE id = ?').run(id);
+    return res.json({ ok: true, app_id: id, unlock_price_cents: 0, unlock: 'off' });
+  }
+  const r = setupAppUnlock(appRow, cents);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, app_id: id, unlock_price_cents: cents, package: r.package });
 });
 
 // ---------------------------------------------------------------------------
